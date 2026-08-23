@@ -10,3 +10,11 @@ version = "0.1.0"
 
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }
+
+[profile.release]
+strip = "symbols"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = "none"

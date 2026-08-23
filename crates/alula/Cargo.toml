@@ -9,12 +9,17 @@ default-run = "alula"
 anyhow = "1"
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 gpui-component = "0.5.1"
-reqwest = { version = "0.13.4", features = ["blocking", "json"] }
-serde = { version = "1", features = ["derive"] }
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
+lsp-types = "0.97"
+reqwest = { version = "0.13.4", features = ["blocking", "cookies", "json"] }
+ropey = "2.0.0-beta.1"
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
+serde-transcode = "1"
 smol = "2"
 tree-sitter-css = "0.23.2"
 tree-sitter-html = "0.23.2"
 tree-sitter-javascript = "0.23.1"
 toml = "0.8"
+tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 url = "2"

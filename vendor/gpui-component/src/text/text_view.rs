@@ -104,6 +104,7 @@ pub struct TextView {
     scrollable: bool,
     select_all_text: Option<SharedString>,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
+    requested_updates: Rc<RefCell<RequestedUpdates>>,
 }
 
 #[derive(PartialEq)]
@@ -124,6 +125,12 @@ enum TextViewType {
 enum Update {
     Text(SharedString),
     Style(Box<TextViewStyle>),
+}
+
+#[derive(Default)]
+struct RequestedUpdates {
+    text: Option<SharedString>,
+    style: Option<TextViewStyle>,
 }
 
 struct ParsedUpdate {
@@ -371,6 +378,7 @@ pub(crate) struct TextViewState {
     list_state: ListState,
     scroll_handle: TextViewScrollHandle,
     pending_parsed_update: Option<ParsedUpdate>,
+    requested_updates: Rc<RefCell<RequestedUpdates>>,
 }
 
 impl TextViewState {
@@ -394,6 +402,7 @@ impl TextViewState {
             list_state,
             scroll_handle,
             pending_parsed_update: None,
+            requested_updates: Rc::new(RefCell::new(RequestedUpdates::default())),
         }
     }
 }
@@ -642,8 +651,12 @@ impl TextView {
             &state,
             cx,
         );
-        if let Some(tx) = &state.read(cx).tx {
-            let _ = tx.try_send(Update::Text(markdown.clone()));
+        let requested_updates = state.read(cx).requested_updates.clone();
+        if let InitState::Initialized { tx } = &init_state {
+            let changed = requested_updates.borrow().text.as_ref() != Some(&markdown);
+            if changed && tx.try_send(Update::Text(markdown.clone())).is_ok() {
+                requested_updates.borrow_mut().text = Some(markdown.clone());
+            }
         }
         Self {
             id,
@@ -655,6 +668,7 @@ impl TextView {
             scrollable: false,
             select_all_text: None,
             code_block_actions: None,
+            requested_updates,
         }
     }
 
@@ -674,8 +688,12 @@ impl TextView {
             });
         let init_state =
             Self::create_init_state(TextViewType::Html, &html, &highlight_theme, &state, cx);
-        if let Some(tx) = &state.read(cx).tx {
-            let _ = tx.try_send(Update::Text(html.clone()));
+        let requested_updates = state.read(cx).requested_updates.clone();
+        if let InitState::Initialized { tx } = &init_state {
+            let changed = requested_updates.borrow().text.as_ref() != Some(&html);
+            if changed && tx.try_send(Update::Text(html.clone())).is_ok() {
+                requested_updates.borrow_mut().text = Some(html.clone());
+            }
         }
         Self {
             id,
@@ -687,6 +705,7 @@ impl TextView {
             scrollable: false,
             select_all_text: None,
             code_block_actions: None,
+            requested_updates,
         }
     }
 
@@ -697,7 +716,10 @@ impl TextView {
             match init_state {
                 InitState::Initializing { text, .. } => *text = raw.clone(),
                 InitState::Initialized { tx } => {
-                    let _ = tx.try_send(Update::Text(raw.clone()));
+                    let changed = self.requested_updates.borrow().text.as_ref() != Some(&raw);
+                    if changed && tx.try_send(Update::Text(raw.clone())).is_ok() {
+                        self.requested_updates.borrow_mut().text = Some(raw.clone());
+                    }
                 }
             }
         }
@@ -711,7 +733,10 @@ impl TextView {
             match init_state {
                 InitState::Initializing { style: s, .. } => **s = style,
                 InitState::Initialized { tx } => {
-                    let _ = tx.try_send(Update::Style(Box::new(style)));
+                    let changed = self.requested_updates.borrow().style.as_ref() != Some(&style);
+                    if changed && tx.try_send(Update::Style(Box::new(style.clone()))).is_ok() {
+                        self.requested_updates.borrow_mut().style = Some(style);
+                    }
                 }
             }
         }
@@ -831,6 +856,13 @@ impl Element for TextView {
                 &highlight_theme,
                 &code_block_actions,
             );
+
+            {
+                let requested_updates = self.requested_updates.clone();
+                let mut requested = requested_updates.borrow_mut();
+                requested.text = Some(text.clone());
+                requested.style = Some(style.clone());
+            }
 
             self.state.update(cx, {
                 let tx = tx.clone();

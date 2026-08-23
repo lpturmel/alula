@@ -1,0 +1,43 @@
+version = 1
+
+[theme]
+name = "Nord"
+mode = "dark"
+radius = 6
+radius_large = 8
+
+[theme.colors]
+background = "#2e3440"
+surface = "#3b4252"
+foreground = "#eceff4"
+muted_foreground = "#d8dee9"
+border = "#4c566a"
+accent = "#5e81ac"
+accent_foreground = "#eceff4"
+primary = "#88c0d0"
+primary_foreground = "#2e3440"
+sidebar = "#292e39"
+sidebar_foreground = "#e5e9f0"
+selection = "#434c5e"
+success = "#a3be8c"
+warning = "#ebcb8b"
+danger = "#bf616a"
+info = "#81a1c1"
+
+[syntax]
+editor_background = "#2e3440"
+editor_foreground = "#d8dee9"
+comment = "#616e88"
+keyword = "#81a1c1"
+string = "#a3be8c"
+number = "#b48ead"
+function = "#88c0d0"
+type_color = "#8fbcbb"
+variable = "#d8dee9"
+property = "#8fbcbb"
+tag = "#81a1c1"
+attribute = "#88c0d0"
+boolean = "#b48ead"
+constant = "#b48ead"
+punctuation = "#d8dee9"
+operator = "#81a1c1"

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use serde_json::{Value, json};
 
@@ -18,7 +18,14 @@ pub struct McpServer {
     workspace: Workspace,
     environments: EnvironmentStore,
     history: HistoryStore,
+    tool_handler: Option<McpToolHandler>,
 }
+
+pub type McpToolHandler = Arc<dyn Fn(&str, Value) -> Value + Send + Sync>;
+
+pub const LATEST_PROTOCOL_VERSION: &str = "2025-11-25";
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+    &["2025-03-26", "2025-06-18", LATEST_PROTOCOL_VERSION];
 
 impl Default for McpServer {
     fn default() -> Self {
@@ -42,7 +49,13 @@ impl McpServer {
             workspace,
             environments,
             history,
+            tool_handler: None,
         }
+    }
+
+    pub fn with_tool_handler(mut self, handler: McpToolHandler) -> Self {
+        self.tool_handler = Some(handler);
+        self
     }
 
     pub fn theme(&self) -> &AppConfig {
@@ -71,11 +84,15 @@ impl McpServer {
                 let requested_version = request
                     .pointer("/params/protocolVersion")
                     .and_then(Value::as_str)
-                    .unwrap_or("2025-06-18");
+                    .unwrap_or(LATEST_PROTOCOL_VERSION);
+                let negotiated_version = SUPPORTED_PROTOCOL_VERSIONS
+                    .contains(&requested_version)
+                    .then_some(requested_version)
+                    .unwrap_or(LATEST_PROTOCOL_VERSION);
                 rpc_result(
                     id,
                     json!({
-                        "protocolVersion": requested_version,
+                        "protocolVersion": negotiated_version,
                         "capabilities": { "tools": { "listChanged": false } },
                         "serverInfo": { "name": "alula", "version": env!("CARGO_PKG_VERSION") },
                         "instructions": "Workspace tabs, execution history, and environments are separate persistent data sets. Use get_theme_schema before authoring themes; preview first, then save only when the user asks to persist."
@@ -99,6 +116,9 @@ impl McpServer {
     }
 
     fn call_tool(&mut self, name: &str, arguments: Value) -> Value {
+        if let Some(handler) = self.tool_handler.clone() {
+            return handler(name, arguments);
+        }
         if name == "get_theme"
             && self.config_path.exists()
             && let Ok(theme) = AppConfig::load(&self.config_path)
@@ -131,6 +151,45 @@ impl McpServer {
                     &self.workspace,
                     &mut self.environments,
                     EnvironmentAgentCommand::CreateEnvironment { name },
+                );
+                if reply.ok
+                    && let Err(error) =
+                        save_toml(&self.state_paths.environments, &self.environments)
+                {
+                    return tool_error(format!("failed to save environments: {error:#}"));
+                }
+                return reply_to_tool(reply);
+            }
+            "set_environment_variable" => {
+                let environment_id = match required_string(&arguments, "environment_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                let name = match required_string(&arguments, "name") {
+                    Ok(name) => name,
+                    Err(error) => return tool_error(error),
+                };
+                let value = match required_string(&arguments, "value") {
+                    Ok(value) => value,
+                    Err(error) => return tool_error(error),
+                };
+                if arguments
+                    .get("secret")
+                    .is_some_and(|value| !value.is_boolean())
+                {
+                    return tool_error("secret must be a boolean");
+                }
+                self.reload_workspace();
+                self.reload_environments();
+                let reply = apply_environment_agent_command(
+                    &self.workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::SetVariable {
+                        environment_id,
+                        name,
+                        value,
+                        secret: arguments.get("secret").and_then(Value::as_bool),
+                    },
                 );
                 if reply.ok
                     && let Err(error) =
@@ -261,7 +320,7 @@ impl McpServer {
     }
 }
 
-fn reply_to_tool(reply: crate::AgentReply) -> Value {
+pub fn reply_to_tool(reply: crate::AgentReply) -> Value {
     let text = reply.message.clone();
     let mut result = json!({
         "content": [{ "type": "text", "text": text }],
@@ -331,6 +390,53 @@ mod tests {
             serde_json::from_str(&server.handle(&request.to_string()).unwrap()).unwrap();
         assert_eq!(saved["result"]["isError"], false);
         assert_eq!(AppConfig::load(&path).unwrap().theme.name, "MCP Mint");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn creates_environment_variables_over_mcp() {
+        let directory =
+            std::env::temp_dir().join(format!("alula-mcp-environment-{}", std::process::id()));
+        let path = directory.join("config.toml");
+        let mut server = McpServer::new(path.clone());
+        let create = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "create_environment",
+                "arguments": { "name": "Staging" }
+            }
+        });
+        let created: Value =
+            serde_json::from_str(&server.handle(&create.to_string()).unwrap()).unwrap();
+        let environment_id = created["result"]["structuredContent"]["environment_id"]
+            .as_str()
+            .unwrap();
+        let set_variable = json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "set_environment_variable",
+                "arguments": {
+                    "environment_id": environment_id,
+                    "name": "api_url",
+                    "value": "https://api.stag.compile.sh"
+                }
+            }
+        });
+        let updated: Value =
+            serde_json::from_str(&server.handle(&set_variable.to_string()).unwrap()).unwrap();
+        assert_eq!(updated["result"]["isError"], false);
+
+        let saved: EnvironmentStore =
+            load_or_default(&StatePaths::beside(&path).environments).unwrap();
+        assert_eq!(saved.environments[0].variables[0].name, "api_url");
+        assert_eq!(
+            saved.environments[0].variables[0].value.as_deref(),
+            Some("https://api.stag.compile.sh")
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 }

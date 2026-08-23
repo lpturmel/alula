@@ -1,0 +1,43 @@
+version = 1
+
+[theme]
+name = "Catppuccin Mocha"
+mode = "dark"
+radius = 6
+radius_large = 8
+
+[theme.colors]
+background = "#1e1e2e"
+surface = "#313244"
+foreground = "#cdd6f4"
+muted_foreground = "#a6adc8"
+border = "#45475a"
+accent = "#cba6f7"
+accent_foreground = "#11111b"
+primary = "#89b4fa"
+primary_foreground = "#11111b"
+sidebar = "#181825"
+sidebar_foreground = "#bac2de"
+selection = "#585b7080"
+success = "#a6e3a1"
+warning = "#f9e2af"
+danger = "#f38ba8"
+info = "#89dceb"
+
+[syntax]
+editor_background = "#1e1e2e"
+editor_foreground = "#cdd6f4"
+comment = "#6c7086"
+keyword = "#cba6f7"
+string = "#a6e3a1"
+number = "#fab387"
+function = "#89b4fa"
+type_color = "#f9e2af"
+variable = "#cdd6f4"
+property = "#89dceb"
+tag = "#89b4fa"
+attribute = "#f9e2af"
+boolean = "#fab387"
+constant = "#fab387"
+punctuation = "#bac2de"
+operator = "#89dceb"

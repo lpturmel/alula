@@ -627,6 +627,25 @@ impl InputState {
         cx.notify();
     }
 
+    /// Append text without recording an undo entry or resetting scroll state.
+    ///
+    /// This is intended for read-only streaming views where repeatedly replacing
+    /// the complete value would cause quadratic copying as the document grows.
+    pub fn append_value(
+        &mut self,
+        value: impl Into<SharedString>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.history.ignore = true;
+        let was_disabled = self.disabled;
+        self.disabled = false;
+        self.selected_range = (self.text.len()..self.text.len()).into();
+        self.insert(value, window, cx);
+        self.disabled = was_disabled;
+        self.history.ignore = false;
+    }
+
     /// Insert text at the current cursor position.
     ///
     /// And the cursor will be moved to the end of inserted text.

@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Alula theme",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "theme", "syntax"],
+  "properties": {
+    "version": { "const": 1 },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "mode", "radius", "radius_large", "colors"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "mode": { "enum": ["light", "dark"] },
+        "radius": { "type": "integer", "minimum": 0, "maximum": 32 },
+        "radius_large": { "type": "integer", "minimum": 0, "maximum": 48 },
+        "colors": { "$ref": "#/$defs/colors" }
+      }
+    },
+    "syntax": { "$ref": "#/$defs/syntax" }
+  },
+  "$defs": {
+    "hexColor": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+    },
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "background",
+        "surface",
+        "foreground",
+        "muted_foreground",
+        "border",
+        "accent",
+        "accent_foreground",
+        "primary",
+        "primary_foreground",
+        "sidebar",
+        "sidebar_foreground",
+        "selection",
+        "success",
+        "warning",
+        "danger",
+        "info"
+      ],
+      "properties": {
+        "background": { "$ref": "#/$defs/hexColor" },
+        "surface": { "$ref": "#/$defs/hexColor" },
+        "foreground": { "$ref": "#/$defs/hexColor" },
+        "muted_foreground": { "$ref": "#/$defs/hexColor" },
+        "border": { "$ref": "#/$defs/hexColor" },
+        "accent": { "$ref": "#/$defs/hexColor" },
+        "accent_foreground": { "$ref": "#/$defs/hexColor" },
+        "primary": { "$ref": "#/$defs/hexColor" },
+        "primary_foreground": { "$ref": "#/$defs/hexColor" },
+        "sidebar": { "$ref": "#/$defs/hexColor" },
+        "sidebar_foreground": { "$ref": "#/$defs/hexColor" },
+        "selection": { "$ref": "#/$defs/hexColor" },
+        "success": { "$ref": "#/$defs/hexColor" },
+        "warning": { "$ref": "#/$defs/hexColor" },
+        "danger": { "$ref": "#/$defs/hexColor" },
+        "info": { "$ref": "#/$defs/hexColor" }
+      }
+    },
+    "syntax": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "editor_background",
+        "editor_foreground",
+        "comment",
+        "keyword",
+        "string",
+        "number",
+        "function",
+        "type_color",
+        "variable",
+        "property",
+        "tag",
+        "attribute",
+        "boolean",
+        "constant",
+        "punctuation",
+        "operator"
+      ],
+      "properties": {
+        "editor_background": { "$ref": "#/$defs/hexColor" },
+        "editor_foreground": { "$ref": "#/$defs/hexColor" },
+        "comment": { "$ref": "#/$defs/hexColor" },
+        "keyword": { "$ref": "#/$defs/hexColor" },
+        "string": { "$ref": "#/$defs/hexColor" },
+        "number": { "$ref": "#/$defs/hexColor" },
+        "function": { "$ref": "#/$defs/hexColor" },
+        "type_color": { "$ref": "#/$defs/hexColor" },
+        "variable": { "$ref": "#/$defs/hexColor" },
+        "property": { "$ref": "#/$defs/hexColor" },
+        "tag": { "$ref": "#/$defs/hexColor" },
+        "attribute": { "$ref": "#/$defs/hexColor" },
+        "boolean": { "$ref": "#/$defs/hexColor" },
+        "constant": { "$ref": "#/$defs/hexColor" },
+        "punctuation": { "$ref": "#/$defs/hexColor" },
+        "operator": { "$ref": "#/$defs/hexColor" }
+      }
+    }
+  }
+}

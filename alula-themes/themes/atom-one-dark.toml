@@ -1,0 +1,43 @@
+version = 1
+
+[theme]
+name = "Atom One Dark"
+mode = "dark"
+radius = 6
+radius_large = 8
+
+[theme.colors]
+background = "#282c34"
+surface = "#21252b"
+foreground = "#abb2bf"
+muted_foreground = "#9da5b4"
+border = "#3e4451"
+accent = "#61afef"
+accent_foreground = "#181a1f"
+primary = "#61afef"
+primary_foreground = "#181a1f"
+sidebar = "#21252b"
+sidebar_foreground = "#abb2bf"
+selection = "#3e4451"
+success = "#98c379"
+warning = "#e5c07b"
+danger = "#e06c75"
+info = "#56b6c2"
+
+[syntax]
+editor_background = "#282c34"
+editor_foreground = "#abb2bf"
+comment = "#5c6370"
+keyword = "#c678dd"
+string = "#98c379"
+number = "#d19a66"
+function = "#61afef"
+type_color = "#e5c07b"
+variable = "#abb2bf"
+property = "#56b6c2"
+tag = "#e06c75"
+attribute = "#d19a66"
+boolean = "#d19a66"
+constant = "#d19a66"
+punctuation = "#abb2bf"
+operator = "#56b6c2"

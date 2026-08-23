@@ -1,0 +1,43 @@
+version = 1
+
+[theme]
+name = "Gruvbox Dark"
+mode = "dark"
+radius = 6
+radius_large = 8
+
+[theme.colors]
+background = "#282828"
+surface = "#3c3836"
+foreground = "#ebdbb2"
+muted_foreground = "#a89984"
+border = "#504945"
+accent = "#458588"
+accent_foreground = "#fbf1c7"
+primary = "#d65d0e"
+primary_foreground = "#fbf1c7"
+sidebar = "#1d2021"
+sidebar_foreground = "#d5c4a1"
+selection = "#504945"
+success = "#b8bb26"
+warning = "#fabd2f"
+danger = "#fb4934"
+info = "#83a598"
+
+[syntax]
+editor_background = "#282828"
+editor_foreground = "#ebdbb2"
+comment = "#928374"
+keyword = "#fb4934"
+string = "#b8bb26"
+number = "#d3869b"
+function = "#fabd2f"
+type_color = "#8ec07c"
+variable = "#ebdbb2"
+property = "#83a598"
+tag = "#fb4934"
+attribute = "#fabd2f"
+boolean = "#d3869b"
+constant = "#d3869b"
+punctuation = "#a89984"
+operator = "#fe8019"

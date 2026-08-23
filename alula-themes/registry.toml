@@ -1,0 +1,155 @@
+schema_version = 1
+updated_at = "2026-08-19"
+
+[[themes]]
+id = "catppuccin-mocha"
+name = "Catppuccin Mocha"
+author = "Catppuccin"
+description = "A soothing pastel dark theme using Catppuccin's Mocha palette."
+mode = "dark"
+license = "MIT"
+license_url = "https://github.com/catppuccin/catppuccin/blob/main/LICENSE"
+source_url = "https://github.com/catppuccin/catppuccin"
+file = "themes/catppuccin-mocha.toml"
+tags = ["dark", "pastel", "catppuccin"]
+[themes.preview]
+background = "#1e1e2e"
+foreground = "#cdd6f4"
+accent = "#cba6f7"
+primary = "#89b4fa"
+
+[[themes]]
+id = "catppuccin-latte"
+name = "Catppuccin Latte"
+author = "Catppuccin"
+description = "A soothing pastel light theme using Catppuccin's Latte palette."
+mode = "light"
+license = "MIT"
+license_url = "https://github.com/catppuccin/catppuccin/blob/main/LICENSE"
+source_url = "https://github.com/catppuccin/catppuccin"
+file = "themes/catppuccin-latte.toml"
+tags = ["light", "pastel", "catppuccin"]
+[themes.preview]
+background = "#eff1f5"
+foreground = "#4c4f69"
+accent = "#8839ef"
+primary = "#1e66f5"
+
+[[themes]]
+id = "dracula"
+name = "Dracula"
+author = "Dracula Theme"
+description = "The canonical Dracula dark palette adapted for Alula."
+mode = "dark"
+license = "MIT"
+license_url = "https://github.com/dracula/dracula-theme/blob/main/LICENSE"
+source_url = "https://github.com/dracula/dracula-theme"
+file = "themes/dracula.toml"
+tags = ["dark", "high-contrast", "dracula"]
+[themes.preview]
+background = "#282a36"
+foreground = "#f8f8f2"
+accent = "#bd93f9"
+primary = "#ff79c6"
+
+[[themes]]
+id = "gruvbox-dark"
+name = "Gruvbox Dark"
+author = "Pavel Pertsev"
+description = "A warm retro-groove dark theme based on the original Gruvbox palette."
+mode = "dark"
+license = "MIT/X11"
+license_url = "https://github.com/morhetz/gruvbox#license"
+source_url = "https://github.com/morhetz/gruvbox"
+file = "themes/gruvbox-dark.toml"
+tags = ["dark", "warm", "retro", "gruvbox"]
+[themes.preview]
+background = "#282828"
+foreground = "#ebdbb2"
+accent = "#458588"
+primary = "#d65d0e"
+
+[[themes]]
+id = "tokyo-night"
+name = "Tokyo Night"
+author = "Enkia"
+description = "A clean dark theme inspired by the lights of downtown Tokyo at night."
+mode = "dark"
+license = "MIT"
+license_url = "https://github.com/tokyo-night/tokyo-night-vscode-theme/blob/master/LICENSE.txt"
+source_url = "https://github.com/tokyo-night/tokyo-night-vscode-theme"
+file = "themes/tokyo-night.toml"
+tags = ["dark", "blue", "tokyo-night"]
+[themes.preview]
+background = "#1a1b26"
+foreground = "#c0caf5"
+accent = "#7aa2f7"
+primary = "#7aa2f7"
+
+[[themes]]
+id = "nord"
+name = "Nord"
+author = "Sven Greb"
+description = "An arctic, north-bluish dark theme using the canonical Nord palette."
+mode = "dark"
+license = "MIT"
+license_url = "https://github.com/nordtheme/nord/blob/develop/license.md"
+source_url = "https://github.com/nordtheme/nord"
+file = "themes/nord.toml"
+tags = ["dark", "blue", "nord"]
+[themes.preview]
+background = "#2e3440"
+foreground = "#eceff4"
+accent = "#5e81ac"
+primary = "#88c0d0"
+
+[[themes]]
+id = "solarized-dark"
+name = "Solarized Dark"
+author = "Ethan Schoonover"
+description = "The precision Solarized palette in its canonical dark arrangement."
+mode = "dark"
+license = "MIT"
+license_url = "https://github.com/altercation/solarized/blob/master/LICENSE"
+source_url = "https://github.com/altercation/solarized"
+file = "themes/solarized-dark.toml"
+tags = ["dark", "low-contrast", "solarized"]
+[themes.preview]
+background = "#002b36"
+foreground = "#839496"
+accent = "#268bd2"
+primary = "#2aa198"
+
+[[themes]]
+id = "solarized-light"
+name = "Solarized Light"
+author = "Ethan Schoonover"
+description = "The precision Solarized palette in its canonical light arrangement."
+mode = "light"
+license = "MIT"
+license_url = "https://github.com/altercation/solarized/blob/master/LICENSE"
+source_url = "https://github.com/altercation/solarized"
+file = "themes/solarized-light.toml"
+tags = ["light", "low-contrast", "solarized"]
+[themes.preview]
+background = "#fdf6e3"
+foreground = "#657b83"
+accent = "#268bd2"
+primary = "#2aa198"
+
+[[themes]]
+id = "atom-one-dark"
+name = "Atom One Dark"
+author = "GitHub / Atom"
+description = "The original Atom One Dark syntax palette adapted to Alula's UI."
+mode = "dark"
+license = "MIT"
+license_url = "https://github.com/atom/one-dark-syntax/blob/master/LICENSE.md"
+source_url = "https://github.com/atom/one-dark-syntax"
+file = "themes/atom-one-dark.toml"
+tags = ["dark", "atom", "one-dark"]
+[themes.preview]
+background = "#282c34"
+foreground = "#abb2bf"
+accent = "#61afef"
+primary = "#61afef"

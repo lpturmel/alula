@@ -38,8 +38,15 @@ impl ResponseBodyCache {
     }
 }
 
+/// Remove layout-only whitespace before a response enters the formatted view.
+/// The raw response remains unchanged in `ResponseBodyCache`.
+pub fn trim_response_formatting_start(body: &str) -> &str {
+    body.trim_start_matches([' ', '\t', '\r', '\n'])
+}
+
 const HIGHLIGHT_CHUNK_TARGET_BYTES: usize = 2 * 1024;
 
+#[cfg(test)]
 fn bounded_utf8_segments(mut text: &str) -> Vec<&str> {
     let mut segments = Vec::new();
     while text.len() > HIGHLIGHT_CHUNK_TARGET_BYTES {
@@ -60,23 +67,43 @@ fn bounded_utf8_segments(mut text: &str) -> Vec<&str> {
 /// can virtualize a large response. A single giant code block is one list item
 /// and forces GPUI to shape the entire payload whenever it is painted.
 pub fn chunked_fenced_code_blocks(language: &str, body: &str) -> String {
-    let mut blocks = Vec::new();
-    let mut chunk = String::new();
+    let estimated_blocks = body.len().div_ceil(HIGHLIGHT_CHUNK_TARGET_BYTES);
+    let mut output = String::with_capacity(
+        body.len()
+            .saturating_add(estimated_blocks.saturating_mul(language.len() + 10)),
+    );
+    let mut chunk_start = None;
+    let mut chunk_end = 0_usize;
     let mut chunk_language = language;
     let mut embedded_language = None;
 
-    let flush = |blocks: &mut Vec<String>, chunk: &mut String, language: &str| {
-        if !chunk.is_empty() {
-            blocks.push(fenced_code_block(language, chunk.trim_end_matches('\n')));
-            chunk.clear();
-        }
-    };
+    let flush =
+        |output: &mut String, chunk_start: &mut Option<usize>, chunk_end: usize, language: &str| {
+            if let Some(start) = chunk_start.take() {
+                append_fenced_code_block(
+                    output,
+                    language,
+                    body[start..chunk_end].trim_end_matches('\n'),
+                );
+            }
+        };
 
+    let mut line_start = 0_usize;
     for line in body.split_inclusive('\n') {
-        for segment in bounded_utf8_segments(line) {
-            let trimmed = segment.trim_start().to_ascii_lowercase();
+        let mut remaining = line;
+        let mut consumed = 0_usize;
+        while !remaining.is_empty() {
+            let end = bounded_utf8_end(remaining);
+            let segment = &remaining[..end];
+            remaining = &remaining[end..];
+            let segment_start = line_start + consumed;
+            let segment_end = segment_start + segment.len();
+            consumed += segment.len();
+            let trimmed = segment.trim_start();
             let line_language = if matches!(language, "html" | "xml") {
-                if trimmed.starts_with("</script") || trimmed.starts_with("</style") {
+                if starts_with_ignore_ascii_case(trimmed, "</script")
+                    || starts_with_ignore_ascii_case(trimmed, "</style")
+                {
                     embedded_language = None;
                     language
                 } else {
@@ -86,46 +113,102 @@ pub fn chunked_fenced_code_blocks(language: &str, body: &str) -> String {
                 language
             };
 
+            let chunk_len = chunk_start
+                .map(|start| chunk_end.saturating_sub(start))
+                .unwrap_or_default();
             if line_language != chunk_language
-                || (!chunk.is_empty()
-                    && chunk.len().saturating_add(segment.len()) > HIGHLIGHT_CHUNK_TARGET_BYTES)
+                || (chunk_start.is_some()
+                    && chunk_len.saturating_add(segment.len()) > HIGHLIGHT_CHUNK_TARGET_BYTES)
             {
-                flush(&mut blocks, &mut chunk, chunk_language);
+                flush(&mut output, &mut chunk_start, chunk_end, chunk_language);
                 chunk_language = line_language;
             }
-            chunk.push_str(segment);
+            chunk_start.get_or_insert(segment_start);
+            chunk_end = segment_end;
 
             if matches!(language, "html" | "xml") {
-                if trimmed.starts_with("<script") && !trimmed.starts_with("</script") {
-                    flush(&mut blocks, &mut chunk, chunk_language);
+                if starts_with_ignore_ascii_case(trimmed, "<script")
+                    && !starts_with_ignore_ascii_case(trimmed, "</script")
+                {
+                    flush(&mut output, &mut chunk_start, chunk_end, chunk_language);
                     chunk_language = "javascript";
                     embedded_language = Some("javascript");
-                } else if trimmed.starts_with("<style") && !trimmed.starts_with("</style") {
-                    flush(&mut blocks, &mut chunk, chunk_language);
+                } else if starts_with_ignore_ascii_case(trimmed, "<style")
+                    && !starts_with_ignore_ascii_case(trimmed, "</style")
+                {
+                    flush(&mut output, &mut chunk_start, chunk_end, chunk_language);
                     chunk_language = "css";
                     embedded_language = Some("css");
                 }
             }
         }
+        line_start += line.len();
     }
-    flush(&mut blocks, &mut chunk, chunk_language);
+    flush(&mut output, &mut chunk_start, chunk_end, chunk_language);
 
-    blocks.join("\n\n")
+    output
 }
 
 pub fn fenced_code_block(language: &str, body: &str) -> String {
-    let mut longest_run = 0_usize;
-    let mut current_run = 0_usize;
-    for ch in body.chars() {
-        if ch == '`' {
-            current_run += 1;
-            longest_run = longest_run.max(current_run);
-        } else {
-            current_run = 0;
+    let mut output = String::with_capacity(body.len().saturating_add(language.len() + 10));
+    append_fenced_code_block(&mut output, language, body);
+    output
+}
+
+fn append_fenced_code_block(output: &mut String, language: &str, body: &str) {
+    append_fenced_code_block_with_length(output, language, body, fenced_code_block_length(body));
+}
+
+fn fenced_code_block_length(body: &str) -> usize {
+    if body.as_bytes().contains(&b'`') {
+        let mut longest_run = 0_usize;
+        let mut current_run = 0_usize;
+        for byte in body.bytes() {
+            if byte == b'`' {
+                current_run += 1;
+                longest_run = longest_run.max(current_run);
+            } else {
+                current_run = 0;
+            }
         }
+        (longest_run + 1).max(3)
+    } else {
+        3
     }
-    let fence = "`".repeat((longest_run + 1).max(3));
-    format!("{fence}{language}\n{body}\n{fence}")
+}
+
+fn append_fenced_code_block_with_length(
+    output: &mut String,
+    language: &str,
+    body: &str,
+    fence_length: usize,
+) {
+    if !output.is_empty() {
+        output.push_str("\n\n");
+    }
+    output.extend(std::iter::repeat_n('`', fence_length));
+    output.push_str(language);
+    output.push('\n');
+    output.push_str(body);
+    output.push('\n');
+    output.extend(std::iter::repeat_n('`', fence_length));
+}
+
+fn bounded_utf8_end(text: &str) -> usize {
+    if text.len() <= HIGHLIGHT_CHUNK_TARGET_BYTES {
+        return text.len();
+    }
+    let mut end = HIGHLIGHT_CHUNK_TARGET_BYTES;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+fn starts_with_ignore_ascii_case(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
 }
 
 pub fn syntax_language(content_type: Option<&str>, body: &str) -> &'static str {
@@ -149,16 +232,28 @@ pub fn syntax_language(content_type: Option<&str>, body: &str) -> &'static str {
 }
 
 pub fn format_response_body(body: &str, content_type: Option<&str>) -> FormattedBody {
+    let body = trim_response_formatting_start(body);
     let language = syntax_language(content_type, body);
     let text = match language {
-        "json" => serde_json::from_str::<serde_json::Value>(body)
-            .and_then(|value| serde_json::to_string_pretty(&value))
-            .unwrap_or_else(|_| body.to_owned()),
+        "json" => format_json(body).unwrap_or_else(|| body.to_owned()),
         "html" | "xml" => format_markup(body),
         "css" | "javascript" => format_braced_source(body),
         _ => body.to_owned(),
     };
     FormattedBody { text, language }
+}
+
+/// Pretty-print JSON directly from the parser into the output buffer. This
+/// avoids building a complete `serde_json::Value` tree and then walking it a
+/// second time, substantially reducing allocations for large responses.
+fn format_json(body: &str) -> Option<String> {
+    let mut deserializer = serde_json::Deserializer::from_str(body);
+    let mut output = Vec::with_capacity(body.len().saturating_add(body.len() / 2));
+    let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
+    let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
+    serde_transcode::transcode(&mut deserializer, &mut serializer).ok()?;
+    deserializer.end().ok()?;
+    String::from_utf8(output).ok()
 }
 
 fn looks_like_json(body: &str) -> bool {
@@ -454,5 +549,15 @@ mod tests {
         assert!(cache.formatted.markdown.contains("\n  24999\n"));
         assert!(cache.formatted.markdown.ends_with("\n```"));
         assert!(cache.formatted.markdown.matches("```json\n").count() > 10);
+    }
+
+    #[test]
+    fn trims_layout_whitespace_only_from_the_formatted_response_start() {
+        let body = "\n \t\r{\"ok\":true}\n";
+        let cache = ResponseBodyCache::new(body, Some("application/json"));
+
+        assert_eq!(cache.raw.text, body);
+        assert_eq!(cache.formatted.display.text, "{\n  \"ok\": true\n}");
+        assert!(cache.formatted.markdown.starts_with("```json\n{"));
     }
 }

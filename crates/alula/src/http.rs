@@ -1,16 +1,27 @@
 use std::{
     io::Read,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::Method;
 use reqwest::blocking::Client;
+use reqwest::cookie::Jar;
 use reqwest::header::{HeaderName, HeaderValue};
 
 use crate::model::{HttpMethod, RequestDraft, ResponseSnapshot};
 
 pub struct HttpExecutor;
+
+/// Application-scoped HTTP state. The client and cookie jar are deliberately
+/// reused so login responses can authenticate later requests without copying
+/// cookies into drafts, history, or persisted workspace files.
+#[derive(Clone)]
+pub struct HttpSession {
+    client: Arc<Mutex<Option<Client>>>,
+    cookie_jar: Arc<Jar>,
+}
 
 // Keep the first paint cheap enough to syntax-highlight synchronously. Later
 // reads are still coalesced before they reach the UI.
@@ -80,20 +91,57 @@ impl Utf8LossyDecoder {
 
 impl HttpExecutor {
     pub fn execute(request: &RequestDraft) -> Result<ResponseSnapshot> {
-        Self::execute_streaming(request, |_| {})
+        HttpSession::new().execute(request)
     }
 
     pub fn execute_streaming(
         request: &RequestDraft,
-        mut on_event: impl FnMut(HttpStreamEvent),
+        on_event: impl FnMut(HttpStreamEvent),
     ) -> Result<ResponseSnapshot> {
-        let client = Client::builder()
+        HttpSession::new().execute_streaming(request, on_event)
+    }
+}
+
+impl HttpSession {
+    pub fn new() -> Self {
+        Self {
+            client: Arc::new(Mutex::new(None)),
+            cookie_jar: Arc::new(Jar::default()),
+        }
+    }
+
+    fn client(&self) -> Result<Client> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| anyhow!("HTTP session client lock was poisoned"))?;
+        if let Some(client) = client.as_ref() {
+            return Ok(client.clone());
+        }
+        let initialized = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(60))
             .user_agent("Alula/0.1")
+            .cookie_provider(self.cookie_jar.clone())
             .build()
             .context("failed to build HTTP client")?;
+        *client = Some(initialized.clone());
+        Ok(initialized)
+    }
 
+    pub fn cookie_jar(&self) -> Arc<Jar> {
+        self.cookie_jar.clone()
+    }
+
+    pub fn execute(&self, request: &RequestDraft) -> Result<ResponseSnapshot> {
+        self.execute_streaming(request, |_| {})
+    }
+
+    pub fn execute_streaming(
+        &self,
+        request: &RequestDraft,
+        mut on_event: impl FnMut(HttpStreamEvent),
+    ) -> Result<ResponseSnapshot> {
         let url = request.resolved_url().map_err(|error| anyhow!(error))?;
         let method = match request.method {
             HttpMethod::Get => Method::GET,
@@ -105,7 +153,7 @@ impl HttpExecutor {
             HttpMethod::Options => Method::OPTIONS,
         };
 
-        let mut builder = client.request(method, url);
+        let mut builder = self.client()?.request(method, url);
         for header in request
             .headers
             .iter()
@@ -219,6 +267,12 @@ impl HttpExecutor {
     }
 }
 
+impl Default for HttpSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Read, Write};
@@ -294,6 +348,56 @@ mod tests {
         assert_eq!(decoder.push(&[0xA6]), "");
         assert_eq!(decoder.push(&[0x85, b'!']), "🦅!");
         assert_eq!(decoder.finish(), "");
+    }
+
+    #[test]
+    fn session_reuses_login_cookie_for_a_later_matching_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (private_request_tx, private_request_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for request_index in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0_u8; 4096];
+                let read = stream.read(&mut buffer).unwrap();
+                if request_index == 1 {
+                    private_request_tx
+                        .send(String::from_utf8_lossy(&buffer[..read]).into_owned())
+                        .unwrap();
+                }
+                let extra_headers = if request_index == 0 {
+                    "Set-Cookie: session=logged-in; Path=/private; HttpOnly\r\n"
+                } else {
+                    ""
+                };
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\n{extra_headers}Content-Length: 2\r\nConnection: close\r\n\r\nok"
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+            }
+        });
+
+        let session = HttpSession::new();
+        session
+            .execute(&RequestDraft {
+                url: format!("http://{address}/login"),
+                ..RequestDraft::default()
+            })
+            .unwrap();
+        session
+            .execute(&RequestDraft {
+                url: format!("http://{address}/private/profile"),
+                ..RequestDraft::default()
+            })
+            .unwrap();
+
+        server.join().unwrap();
+        let request = private_request_rx.recv().unwrap().to_ascii_lowercase();
+        assert!(request.contains("cookie: session=logged-in\r\n"));
     }
 
     #[test]

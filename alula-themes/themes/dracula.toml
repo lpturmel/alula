@@ -1,0 +1,43 @@
+version = 1
+
+[theme]
+name = "Dracula"
+mode = "dark"
+radius = 6
+radius_large = 8
+
+[theme.colors]
+background = "#282a36"
+surface = "#343746"
+foreground = "#f8f8f2"
+muted_foreground = "#a6accd"
+border = "#44475a"
+accent = "#bd93f9"
+accent_foreground = "#282a36"
+primary = "#ff79c6"
+primary_foreground = "#282a36"
+sidebar = "#21222c"
+sidebar_foreground = "#f8f8f2"
+selection = "#44475a"
+success = "#50fa7b"
+warning = "#f1fa8c"
+danger = "#ff5555"
+info = "#8be9fd"
+
+[syntax]
+editor_background = "#282a36"
+editor_foreground = "#f8f8f2"
+comment = "#6272a4"
+keyword = "#ff79c6"
+string = "#f1fa8c"
+number = "#bd93f9"
+function = "#50fa7b"
+type_color = "#8be9fd"
+variable = "#f8f8f2"
+property = "#8be9fd"
+tag = "#ff79c6"
+attribute = "#50fa7b"
+boolean = "#bd93f9"
+constant = "#bd93f9"
+punctuation = "#f8f8f2"
+operator = "#ff79c6"

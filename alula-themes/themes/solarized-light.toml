@@ -1,0 +1,43 @@
+version = 1
+
+[theme]
+name = "Solarized Light"
+mode = "light"
+radius = 6
+radius_large = 8
+
+[theme.colors]
+background = "#fdf6e3"
+surface = "#eee8d5"
+foreground = "#657b83"
+muted_foreground = "#586e75"
+border = "#93a1a1"
+accent = "#268bd2"
+accent_foreground = "#fdf6e3"
+primary = "#2aa198"
+primary_foreground = "#fdf6e3"
+sidebar = "#eee8d5"
+sidebar_foreground = "#586e75"
+selection = "#93a1a166"
+success = "#859900"
+warning = "#b58900"
+danger = "#dc322f"
+info = "#268bd2"
+
+[syntax]
+editor_background = "#fdf6e3"
+editor_foreground = "#657b83"
+comment = "#93a1a1"
+keyword = "#859900"
+string = "#2aa198"
+number = "#d33682"
+function = "#268bd2"
+type_color = "#b58900"
+variable = "#657b83"
+property = "#2aa198"
+tag = "#268bd2"
+attribute = "#b58900"
+boolean = "#d33682"
+constant = "#cb4b16"
+punctuation = "#839496"
+operator = "#6c71c4"

@@ -1,11 +1,13 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context as _, Result};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use anyhow::{Context as _, Result, anyhow};
+use serde::{Deserialize, Serialize, Serializer, de::DeserializeOwned, ser::SerializeStruct};
 
 use crate::model::{RequestDraft, ResponseSnapshot, Workspace, next_id};
 
@@ -18,6 +20,8 @@ pub struct Environment {
     pub name: String,
     #[serde(default)]
     pub requests: Vec<RequestDraft>,
+    #[serde(default)]
+    pub variables: Vec<EnvironmentVariable>,
 }
 
 impl Environment {
@@ -26,7 +30,58 @@ impl Environment {
             id: next_id("environment"),
             name: name.into(),
             requests: Vec::new(),
+            variables: Vec::new(),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct EnvironmentVariable {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub secret: bool,
+}
+
+impl EnvironmentVariable {
+    pub fn public(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            id: next_id("variable"),
+            name: name.into(),
+            value: Some(value.into()),
+            secret: false,
+        }
+    }
+
+    pub fn secret(name: impl Into<String>, value: Option<String>) -> Self {
+        Self {
+            id: next_id("variable"),
+            name: name.into(),
+            value,
+            secret: true,
+        }
+    }
+}
+
+// Secret values may live in memory while a request is being edited or sent,
+// but serialization deliberately drops them. Only the variable metadata is
+// written to environments.toml; the value belongs to the OS credential store.
+impl Serialize for EnvironmentVariable {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state =
+            serializer.serialize_struct("EnvironmentVariable", if self.secret { 3 } else { 4 })?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("name", &self.name)?;
+        if !self.secret {
+            state.serialize_field("value", &self.value)?;
+        }
+        state.serialize_field("secret", &self.secret)?;
+        state.end()
     }
 }
 
@@ -62,6 +117,27 @@ impl EnvironmentStore {
                 .iter()
                 .any(|request| request.id == request_id)
         })
+    }
+
+    pub fn environment_for_request_mut(&mut self, request_id: &str) -> Option<&mut Environment> {
+        self.environments.iter_mut().find(|environment| {
+            environment
+                .requests
+                .iter()
+                .any(|request| request.id == request_id)
+        })
+    }
+
+    pub fn hydrate_secrets(&mut self) {
+        for environment in &mut self.environments {
+            for variable in &mut environment.variables {
+                if variable.secret {
+                    variable.value = crate::variables::load_secret(&environment.id, &variable.id)
+                        .ok()
+                        .flatten();
+                }
+            }
+        }
     }
 
     /// A request belongs to at most one environment. Reassigning it moves the
@@ -152,22 +228,23 @@ pub struct HistoryStore {
     #[serde(default = "state_version")]
     pub version: u32,
     #[serde(default)]
-    pub entries: Vec<HistoryEntry>,
+    pub entries: Arc<Vec<HistoryEntry>>,
 }
 
 impl Default for HistoryStore {
     fn default() -> Self {
         Self {
             version: STATE_VERSION,
-            entries: Vec::new(),
+            entries: Arc::new(Vec::new()),
         }
     }
 }
 
 impl HistoryStore {
     pub fn push(&mut self, entry: HistoryEntry) {
-        self.entries.insert(0, entry);
-        self.entries.truncate(MAX_HISTORY_ENTRIES);
+        let entries = Arc::make_mut(&mut self.entries);
+        entries.insert(0, entry);
+        entries.truncate(MAX_HISTORY_ENTRIES);
     }
 }
 
@@ -198,18 +275,42 @@ pub struct PersistedState {
 
 impl PersistedState {
     pub fn load(paths: &StatePaths) -> Result<Self> {
-        Ok(Self {
-            workspace: load_or_default::<Workspace>(&paths.workspace)?.normalize(),
-            history: load_or_default(&paths.history)?,
-            environments: load_or_default(&paths.environments)?,
+        thread::scope(|scope| {
+            let workspace = scope.spawn(|| load_or_default::<Workspace>(&paths.workspace));
+            let history = scope.spawn(|| load_or_default::<HistoryStore>(&paths.history));
+            let environments =
+                scope.spawn(|| load_or_default::<EnvironmentStore>(&paths.environments));
+            Ok(Self {
+                workspace: workspace
+                    .join()
+                    .map_err(|_| anyhow!("workspace loader panicked"))??
+                    .normalize(),
+                history: history
+                    .join()
+                    .map_err(|_| anyhow!("history loader panicked"))??,
+                environments: environments
+                    .join()
+                    .map_err(|_| anyhow!("environment loader panicked"))??,
+            })
         })
     }
 
     pub fn save(&self, paths: &StatePaths) -> Result<()> {
-        save_toml(&paths.workspace, &self.workspace)?;
-        save_toml(&paths.history, &self.history)?;
-        save_toml(&paths.environments, &self.environments)?;
-        Ok(())
+        thread::scope(|scope| {
+            let workspace = scope.spawn(|| save_toml(&paths.workspace, &self.workspace));
+            let history = scope.spawn(|| save_toml(&paths.history, &self.history));
+            let environments = scope.spawn(|| save_toml(&paths.environments, &self.environments));
+            workspace
+                .join()
+                .map_err(|_| anyhow!("workspace saver panicked"))??;
+            history
+                .join()
+                .map_err(|_| anyhow!("history saver panicked"))??;
+            environments
+                .join()
+                .map_err(|_| anyhow!("environment saver panicked"))??;
+            Ok(())
+        })
     }
 }
 
@@ -295,5 +396,16 @@ mod tests {
         store.assign(&second, request.clone()).unwrap();
         assert!(store.environments[0].requests.is_empty());
         assert_eq!(store.environments[1].requests, vec![request]);
+    }
+
+    #[test]
+    fn secret_variable_values_are_never_serialized() {
+        let variable = EnvironmentVariable::secret("token", Some("do-not-persist".into()));
+        let source = toml::to_string(&variable).unwrap();
+        assert!(source.contains("name = \"token\""));
+        assert!(source.contains("secret = true"));
+        assert!(!source.contains("do-not-persist"));
+        let restored: EnvironmentVariable = toml::from_str(&source).unwrap();
+        assert_eq!(restored.value, None);
     }
 }

@@ -1,5 +1,5 @@
 use std::{
-    collections::hash_map::DefaultHasher,
+    collections::{HashMap, hash_map::DefaultHasher},
     env, fs,
     hash::{Hash, Hasher},
     path::{Path, PathBuf},
@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
-use gpui::Hsla;
+use gpui::{Hsla, Keystroke};
 use gpui_component::{
     Colorize, ThemeConfig as GpuiThemeConfig, ThemeConfigColors, ThemeMode,
     highlighter::HighlightThemeStyle,
@@ -37,6 +37,7 @@ pub struct AppConfig {
     pub version: u32,
     pub application: ApplicationSettings,
     pub agent: AgentSettings,
+    pub keybindings: KeybindingSettings,
     pub theme: ThemeSettings,
     pub syntax: SyntaxPalette,
 }
@@ -54,6 +55,220 @@ pub struct ApplicationSettings {
 pub struct AgentSettings {
     /// Reserved loopback port for Alula's agent/MCP service.
     pub port: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeybindingSettings {
+    pub command_palette: String,
+    pub create_new: String,
+    pub close_tab: String,
+    pub next_tab: String,
+    pub previous_tab: String,
+    pub send_request: String,
+    pub show_parameters: String,
+    pub show_headers: String,
+    pub show_body: String,
+    pub copy_response_body: String,
+    pub add_parameter: String,
+    pub add_header: String,
+    pub show_requests: String,
+    pub show_environments: String,
+    pub show_history: String,
+    pub open_settings: String,
+    pub focus_url: String,
+    pub show_formatted_response: String,
+    pub show_raw_response: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ShortcutCommand {
+    OpenCommandPalette,
+    CreateNew,
+    CloseTab,
+    NextTab,
+    PreviousTab,
+    SendRequest,
+    ShowParameters,
+    ShowHeaders,
+    ShowBody,
+    CopyResponseBody,
+    AddParameter,
+    AddHeader,
+    ShowRequests,
+    ShowEnvironments,
+    ShowHistory,
+    OpenSettings,
+    FocusUrl,
+    ShowFormattedResponse,
+    ShowRawResponse,
+}
+
+impl ShortcutCommand {
+    pub const ALL: [Self; 19] = [
+        Self::OpenCommandPalette,
+        Self::CreateNew,
+        Self::CloseTab,
+        Self::NextTab,
+        Self::PreviousTab,
+        Self::SendRequest,
+        Self::ShowParameters,
+        Self::ShowHeaders,
+        Self::ShowBody,
+        Self::CopyResponseBody,
+        Self::AddParameter,
+        Self::AddHeader,
+        Self::ShowRequests,
+        Self::ShowEnvironments,
+        Self::ShowHistory,
+        Self::OpenSettings,
+        Self::FocusUrl,
+        Self::ShowFormattedResponse,
+        Self::ShowRawResponse,
+    ];
+
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::OpenCommandPalette => "open-command-palette",
+            Self::CreateNew => "create-new",
+            Self::CloseTab => "close-tab",
+            Self::NextTab => "next-tab",
+            Self::PreviousTab => "previous-tab",
+            Self::SendRequest => "send-request",
+            Self::ShowParameters => "show-parameters",
+            Self::ShowHeaders => "show-headers",
+            Self::ShowBody => "show-body",
+            Self::CopyResponseBody => "copy-response-body",
+            Self::AddParameter => "add-parameter",
+            Self::AddHeader => "add-header",
+            Self::ShowRequests => "show-requests",
+            Self::ShowEnvironments => "show-environments",
+            Self::ShowHistory => "show-history",
+            Self::OpenSettings => "open-settings",
+            Self::FocusUrl => "focus-url",
+            Self::ShowFormattedResponse => "show-formatted-response",
+            Self::ShowRawResponse => "show-raw-response",
+        }
+    }
+
+    pub fn category(self) -> &'static str {
+        match self {
+            Self::OpenCommandPalette => "Navigation",
+            Self::CreateNew | Self::CloseTab | Self::NextTab | Self::PreviousTab => "Tabs",
+            Self::SendRequest
+            | Self::ShowParameters
+            | Self::ShowHeaders
+            | Self::ShowBody
+            | Self::CopyResponseBody
+            | Self::AddParameter
+            | Self::AddHeader
+            | Self::FocusUrl
+            | Self::ShowFormattedResponse
+            | Self::ShowRawResponse => "Request",
+            Self::ShowRequests
+            | Self::ShowEnvironments
+            | Self::ShowHistory
+            | Self::OpenSettings => "Navigation",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OpenCommandPalette => "Open command palette",
+            Self::CreateNew => "Create new",
+            Self::CloseTab => "Close request tab",
+            Self::NextTab => "Next request tab",
+            Self::PreviousTab => "Previous request tab",
+            Self::SendRequest => "Send request",
+            Self::ShowParameters => "Open parameters",
+            Self::ShowHeaders => "Open headers",
+            Self::ShowBody => "Open request body",
+            Self::CopyResponseBody => "Copy response body",
+            Self::AddParameter => "Add parameter",
+            Self::AddHeader => "Add header",
+            Self::ShowRequests => "Go to requests",
+            Self::ShowEnvironments => "Go to environments",
+            Self::ShowHistory => "Go to history",
+            Self::OpenSettings => "Open settings",
+            Self::FocusUrl => "Focus URL",
+            Self::ShowFormattedResponse => "Show formatted response",
+            Self::ShowRawResponse => "Show raw response",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::OpenCommandPalette => "Opens search and quick actions from anywhere in Alula.",
+            Self::CreateNew => {
+                "Creates a request in Requests or opens New Environment in Environments."
+            }
+            Self::CloseTab => "Closes the active request tab when more than one is open.",
+            Self::NextTab => "Cycles forward through open request tabs.",
+            Self::PreviousTab => "Cycles backward through open request tabs.",
+            Self::SendRequest => "Sends the active HTTP request.",
+            Self::ShowParameters => "Shows the active request's parameter editor.",
+            Self::ShowHeaders => "Shows the active request's header editor.",
+            Self::ShowBody => "Shows the active request body editor.",
+            Self::CopyResponseBody => "Copies the currently displayed response body.",
+            Self::AddParameter => "Adds a parameter row and opens Parameters.",
+            Self::AddHeader => "Adds a header row and opens Headers.",
+            Self::ShowRequests => "Opens the Requests workspace.",
+            Self::ShowEnvironments => "Opens the Environments workspace.",
+            Self::ShowHistory => "Opens the request History workspace.",
+            Self::OpenSettings => "Opens the Settings dialog.",
+            Self::FocusUrl => "Moves keyboard focus to the active request URL.",
+            Self::ShowFormattedResponse => "Shows the formatted, highlighted response.",
+            Self::ShowRawResponse => "Shows the raw response body.",
+        }
+    }
+
+    pub fn binding<'a>(self, settings: &'a KeybindingSettings) -> &'a str {
+        match self {
+            Self::OpenCommandPalette => &settings.command_palette,
+            Self::CreateNew => &settings.create_new,
+            Self::CloseTab => &settings.close_tab,
+            Self::NextTab => &settings.next_tab,
+            Self::PreviousTab => &settings.previous_tab,
+            Self::SendRequest => &settings.send_request,
+            Self::ShowParameters => &settings.show_parameters,
+            Self::ShowHeaders => &settings.show_headers,
+            Self::ShowBody => &settings.show_body,
+            Self::CopyResponseBody => &settings.copy_response_body,
+            Self::AddParameter => &settings.add_parameter,
+            Self::AddHeader => &settings.add_header,
+            Self::ShowRequests => &settings.show_requests,
+            Self::ShowEnvironments => &settings.show_environments,
+            Self::ShowHistory => &settings.show_history,
+            Self::OpenSettings => &settings.open_settings,
+            Self::FocusUrl => &settings.focus_url,
+            Self::ShowFormattedResponse => &settings.show_formatted_response,
+            Self::ShowRawResponse => &settings.show_raw_response,
+        }
+    }
+
+    pub fn set_binding(self, settings: &mut KeybindingSettings, binding: String) {
+        *match self {
+            Self::OpenCommandPalette => &mut settings.command_palette,
+            Self::CreateNew => &mut settings.create_new,
+            Self::CloseTab => &mut settings.close_tab,
+            Self::NextTab => &mut settings.next_tab,
+            Self::PreviousTab => &mut settings.previous_tab,
+            Self::SendRequest => &mut settings.send_request,
+            Self::ShowParameters => &mut settings.show_parameters,
+            Self::ShowHeaders => &mut settings.show_headers,
+            Self::ShowBody => &mut settings.show_body,
+            Self::CopyResponseBody => &mut settings.copy_response_body,
+            Self::AddParameter => &mut settings.add_parameter,
+            Self::AddHeader => &mut settings.add_header,
+            Self::ShowRequests => &mut settings.show_requests,
+            Self::ShowEnvironments => &mut settings.show_environments,
+            Self::ShowHistory => &mut settings.show_history,
+            Self::OpenSettings => &mut settings.open_settings,
+            Self::FocusUrl => &mut settings.focus_url,
+            Self::ShowFormattedResponse => &mut settings.show_formatted_response,
+            Self::ShowRawResponse => &mut settings.show_raw_response,
+        } = binding;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -114,6 +329,7 @@ impl Default for AppConfig {
             version: 1,
             application: ApplicationSettings::default(),
             agent: AgentSettings::default(),
+            keybindings: KeybindingSettings::default(),
             theme: ThemeSettings::default(),
             syntax: SyntaxPalette::default(),
         }
@@ -134,13 +350,39 @@ impl Default for AgentSettings {
     }
 }
 
+impl Default for KeybindingSettings {
+    fn default() -> Self {
+        Self {
+            command_palette: "secondary-k".into(),
+            create_new: "secondary-n".into(),
+            close_tab: "secondary-w".into(),
+            next_tab: "ctrl-tab".into(),
+            previous_tab: "ctrl-shift-tab".into(),
+            send_request: "secondary-enter".into(),
+            show_parameters: "secondary-1".into(),
+            show_headers: "secondary-2".into(),
+            show_body: "secondary-3".into(),
+            copy_response_body: "secondary-shift-c".into(),
+            add_parameter: "secondary-alt-p".into(),
+            add_header: "secondary-alt-h".into(),
+            show_requests: "secondary-shift-r".into(),
+            show_environments: "secondary-shift-e".into(),
+            show_history: "secondary-shift-y".into(),
+            open_settings: "secondary-,".into(),
+            focus_url: "secondary-l".into(),
+            show_formatted_response: "secondary-alt-1".into(),
+            show_raw_response: "secondary-alt-2".into(),
+        }
+    }
+}
+
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
-            name: "Alula Dark".into(),
+            name: "Alula Quiet Velocity".into(),
             mode: ThemeModePreference::Dark,
-            radius: 6,
-            radius_large: 8,
+            radius: 7,
+            radius_large: 13,
             colors: ThemePalette::default(),
         }
     }
@@ -149,22 +391,22 @@ impl Default for ThemeSettings {
 impl Default for ThemePalette {
     fn default() -> Self {
         Self {
-            background: "#0a0a0a".into(),
-            surface: "#171717".into(),
-            foreground: "#fafafa".into(),
-            muted_foreground: "#a3a3a3".into(),
-            border: "#262626".into(),
-            accent: "#262626".into(),
-            accent_foreground: "#fafafa".into(),
-            primary: "#fafafa".into(),
-            primary_foreground: "#171717".into(),
-            sidebar: "#0a0a0a".into(),
-            sidebar_foreground: "#e5e5e5".into(),
-            selection: "#2563eb66".into(),
-            success: "#22c55e".into(),
-            warning: "#eab308".into(),
-            danger: "#ef4444".into(),
-            info: "#0ea5e9".into(),
+            background: "#0D0E13".into(),
+            surface: "#171820".into(),
+            foreground: "#F3F3F6".into(),
+            muted_foreground: "#A7A8B2".into(),
+            border: "#282A34".into(),
+            accent: "#8C82FF1F".into(),
+            accent_foreground: "#F3F3F6".into(),
+            primary: "#8C82FF".into(),
+            primary_foreground: "#FFFFFF".into(),
+            sidebar: "#111218".into(),
+            sidebar_foreground: "#A7A8B2".into(),
+            selection: "#8C82FF33".into(),
+            success: "#6ED89A".into(),
+            warning: "#F1BD6C".into(),
+            danger: "#FF7878".into(),
+            info: "#72C7E8".into(),
         }
     }
 }
@@ -172,22 +414,22 @@ impl Default for ThemePalette {
 impl Default for SyntaxPalette {
     fn default() -> Self {
         Self {
-            editor_background: "#171717".into(),
-            editor_foreground: "#caccca".into(),
-            comment: "#9e9e9e".into(),
-            keyword: "#c28b12".into(),
-            string: "#62ba46".into(),
-            number: "#e1d797".into(),
-            function: "#fdd888".into(),
-            type_color: "#b5af9a".into(),
-            variable: "#caccca".into(),
-            property: "#d4be98".into(),
-            tag: "#e7cb8f".into(),
-            attribute: "#e7cb8f".into(),
-            boolean: "#e1d797".into(),
-            constant: "#e1d797".into(),
-            punctuation: "#caccca".into(),
-            operator: "#b5af9a".into(),
+            editor_background: "#0D0E13".into(),
+            editor_foreground: "#A7A8B2".into(),
+            comment: "#737580".into(),
+            keyword: "#B7ADFF".into(),
+            string: "#8BD6AE".into(),
+            number: "#F1C982".into(),
+            function: "#72C7E8".into(),
+            type_color: "#B7ADFF".into(),
+            variable: "#A7A8B2".into(),
+            property: "#B7ADFF".into(),
+            tag: "#FF9E9E".into(),
+            attribute: "#F1C982".into(),
+            boolean: "#F1C982".into(),
+            constant: "#F1C982".into(),
+            punctuation: "#737580".into(),
+            operator: "#A7A8B2".into(),
         }
     }
 }
@@ -333,6 +575,23 @@ impl AppConfig {
         if self.agent.port == 0 {
             bail!("agent.port must be between 1 and 65535");
         }
+        let mut assigned = HashMap::new();
+        for command in ShortcutCommand::ALL {
+            let source = command.binding(&self.keybindings).trim();
+            if source.is_empty() {
+                continue;
+            }
+            let stroke = Keystroke::parse(source)
+                .map_err(|error| anyhow::anyhow!("{}: {error}", command.label()))?;
+            let normalized = stroke.unparse();
+            if let Some(previous) = assigned.insert(normalized.clone(), command) {
+                bail!(
+                    "shortcut {normalized} is assigned to both {} and {}",
+                    previous.label(),
+                    command.label()
+                );
+            }
+        }
         Ok(())
     }
 
@@ -366,17 +625,21 @@ impl AppConfig {
         colors.warning = color(&palette.warning);
         colors.danger = color(&palette.danger);
         colors.info = color(&palette.info);
-        colors.tab = color(&palette.background);
-        colors.tab_active = color(&palette.surface);
+        colors.tab = color(&palette.sidebar);
+        colors.tab_active = color(&palette.background);
         colors.tab_active_foreground = color(&palette.foreground);
-        colors.tab_bar = color(&palette.background);
-        colors.tab_bar_segmented = color(&palette.surface);
+        colors.tab_bar = color(&palette.sidebar);
+        colors.tab_bar_segmented = color(&palette.background);
         colors.tab_foreground = color(&palette.muted_foreground);
         colors.list = color(&palette.background);
         colors.list_head = color(&palette.surface);
         colors.list_hover = color(&palette.surface);
         colors.title_bar = color(&palette.surface);
         colors.title_bar_border = color(&palette.border);
+        colors.caret = colors.primary.clone();
+        colors.ring = colors.primary.clone();
+        colors.link = colors.primary.clone();
+        colors.progress_bar = colors.primary.clone();
         colors.primary_hover = colors.primary.clone();
         colors.primary_active = colors.primary.clone();
         colors.secondary_hover = colors.accent.clone();
@@ -416,6 +679,7 @@ impl AppConfig {
         Ok(Rc::new(GpuiThemeConfig {
             name: self.theme.name.clone().into(),
             mode: self.theme.mode.gpui(),
+            font_family: Some("Inter Variable".into()),
             radius: Some(self.theme.radius),
             radius_lg: Some(self.theme.radius_large),
             colors,
@@ -770,6 +1034,41 @@ mod tests {
 
         config.agent.port = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn keybindings_round_trip_and_allow_unassigned_commands() {
+        let mut config = AppConfig::default();
+        config.keybindings.send_request = "secondary-shift-enter".into();
+        config.keybindings.show_raw_response.clear();
+        let source = config.to_toml().unwrap();
+        assert!(source.contains("[keybindings]"));
+        let decoded = AppConfig::from_toml(&source).unwrap();
+        assert_eq!(decoded.keybindings, config.keybindings);
+    }
+
+    #[test]
+    fn keybindings_reject_invalid_and_duplicate_shortcuts() {
+        let mut config = AppConfig::default();
+        config.keybindings.send_request = "not-a-valid-shortcut".into();
+        assert!(config.validate().is_err());
+
+        let mut config = AppConfig::default();
+        config.keybindings.open_settings = config.keybindings.create_new.clone();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("assigned to both"));
+        assert!(error.contains("Create new"));
+        assert!(error.contains("Open settings"));
+    }
+
+    #[test]
+    fn every_default_keybinding_is_valid_and_unique() {
+        let config = AppConfig::default();
+        config.validate().unwrap();
+        for command in ShortcutCommand::ALL {
+            assert!(!command.binding(&config.keybindings).is_empty());
+            assert!(Keystroke::parse(command.binding(&config.keybindings)).is_ok());
+        }
     }
 
     #[test]

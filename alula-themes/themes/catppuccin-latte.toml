@@ -1,0 +1,43 @@
+version = 1
+
+[theme]
+name = "Catppuccin Latte"
+mode = "light"
+radius = 6
+radius_large = 8
+
+[theme.colors]
+background = "#eff1f5"
+surface = "#e6e9ef"
+foreground = "#4c4f69"
+muted_foreground = "#6c6f85"
+border = "#bcc0cc"
+accent = "#8839ef"
+accent_foreground = "#eff1f5"
+primary = "#1e66f5"
+primary_foreground = "#eff1f5"
+sidebar = "#e6e9ef"
+sidebar_foreground = "#5c5f77"
+selection = "#acb0be80"
+success = "#40a02b"
+warning = "#df8e1d"
+danger = "#d20f39"
+info = "#04a5e5"
+
+[syntax]
+editor_background = "#eff1f5"
+editor_foreground = "#4c4f69"
+comment = "#8c8fa1"
+keyword = "#8839ef"
+string = "#40a02b"
+number = "#fe640b"
+function = "#1e66f5"
+type_color = "#df8e1d"
+variable = "#4c4f69"
+property = "#04a5e5"
+tag = "#1e66f5"
+attribute = "#df8e1d"
+boolean = "#fe640b"
+constant = "#fe640b"
+punctuation = "#6c6f85"
+operator = "#179299"

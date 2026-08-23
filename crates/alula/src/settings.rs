@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Colorize as _, Sizable as _, Theme,
+    ActiveTheme as _, Colorize as _, Disableable as _, Sizable as _, Theme,
     button::{Button, ButtonVariants as _},
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     input::{Input, InputEvent, InputState},
+    kbd::Kbd,
     label::Label,
     scroll::ScrollableElement as _,
     switch::Switch,
@@ -14,22 +15,26 @@ use gpui_component::{
     text::TextView,
 };
 
-use crate::{AppConfig, ThemeModePreference, import_editor_theme, save_config_location};
+use crate::{
+    AppConfig, ShortcutCommand, ThemeModePreference, import_editor_theme, save_config_location,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SettingsPage {
     General,
     Agent,
+    Keybindings,
     Theme,
 }
 
 impl SettingsPage {
-    const ALL: [Self; 3] = [Self::General, Self::Agent, Self::Theme];
+    const ALL: [Self; 4] = [Self::General, Self::Agent, Self::Keybindings, Self::Theme];
 
     fn label(self) -> &'static str {
         match self {
             Self::General => "General",
             Self::Agent => "Agent",
+            Self::Keybindings => "Keybindings",
             Self::Theme => "Theme",
         }
     }
@@ -49,7 +54,7 @@ impl ThemeSection {
         match self {
             Self::Interface => "Interface",
             Self::Syntax => "Syntax",
-            Self::Import => "Import & agents",
+            Self::Import => "Import & agent",
         }
     }
 }
@@ -264,6 +269,8 @@ pub struct SettingsView {
     radius: Entity<InputState>,
     radius_large: Entity<InputState>,
     colors: Vec<(ColorKey, Entity<ColorPickerState>)>,
+    shortcut_focus: FocusHandle,
+    recording_shortcut: Option<ShortcutCommand>,
     status: Option<(bool, String)>,
 }
 
@@ -356,6 +363,8 @@ impl SettingsView {
             radius,
             radius_large,
             colors,
+            shortcut_focus: cx.focus_handle(),
+            recording_shortcut: None,
             status: None,
         }
     }
@@ -416,6 +425,93 @@ impl SettingsView {
             ThemeModePreference::Light
         };
         self.preview(cx);
+        cx.notify();
+    }
+
+    fn begin_shortcut_recording(
+        &mut self,
+        command: ShortcutCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.recording_shortcut == Some(command) {
+            self.recording_shortcut = None;
+            self.status = None;
+            cx.notify();
+            return;
+        }
+        self.recording_shortcut = Some(command);
+        self.status = Some((
+            true,
+            format!(
+                "Press a shortcut for {}. Delete clears it, or click Cancel.",
+                command.label()
+            ),
+        ));
+        self.shortcut_focus.focus(window);
+        cx.notify();
+    }
+
+    fn capture_shortcut(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(command) = self.recording_shortcut else {
+            return;
+        };
+        let key = event.keystroke.key.as_str();
+        if key == "escape" {
+            self.recording_shortcut = None;
+            self.status = None;
+            cx.notify();
+            return;
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+        if key == "delete" || key == "backspace" {
+            command.set_binding(&mut self.working.keybindings, String::new());
+            self.recording_shortcut = None;
+            self.status = Some((true, format!("{} is now unassigned.", command.label())));
+            cx.notify();
+            return;
+        }
+        if matches!(
+            key,
+            "shift" | "control" | "ctrl" | "alt" | "platform" | "cmd" | "function"
+        ) {
+            return;
+        }
+
+        let binding = event.keystroke.unparse();
+        command.set_binding(&mut self.working.keybindings, binding.clone());
+        self.recording_shortcut = None;
+        self.status = match self.working.validate() {
+            Ok(()) => Some((
+                true,
+                format!(
+                    "{} set to {}.",
+                    command.label(),
+                    Kbd::format(&event.keystroke)
+                ),
+            )),
+            Err(error) => Some((false, error.to_string())),
+        };
+        cx.notify();
+    }
+
+    fn clear_shortcut(&mut self, command: ShortcutCommand, cx: &mut Context<Self>) {
+        command.set_binding(&mut self.working.keybindings, String::new());
+        self.recording_shortcut = None;
+        self.status = Some((true, format!("{} is now unassigned.", command.label())));
+        cx.notify();
+    }
+
+    fn reset_shortcuts(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.working.keybindings = Default::default();
+        self.recording_shortcut = None;
+        self.status = Some((true, "Default keybindings restored.".into()));
         cx.notify();
     }
 
@@ -499,6 +595,7 @@ impl SettingsView {
             Ok(mut config) => {
                 config.application = self.working.application.clone();
                 config.agent = self.working.agent.clone();
+                config.keybindings = self.working.keybindings.clone();
                 self.working = config;
                 self.sync_controls(window, cx);
                 self.preview(cx);
@@ -609,13 +706,14 @@ impl SettingsView {
     }
 
     fn render_agent(&self, cx: &mut Context<Self>) -> Div {
+        let endpoint = format!("http://127.0.0.1:{}/mcp", self.working.agent.port);
         div()
             .flex()
             .flex_col()
             .gap_5()
             .child(section_heading(
                 "Agent service",
-                "Configure the loopback port reserved for Alula's MCP and agent integrations.",
+                "Alula starts a loopback Streamable HTTP MCP server with the desktop app.",
             ))
             .child(
                 div()
@@ -630,10 +728,133 @@ impl SettingsView {
                     .border_color(cx.theme().border)
                     .bg(cx.theme().muted)
                     .child(
-                        Label::new("Use an unprivileged port from 1 to 65535. A changed port takes effect when the agent service next starts.")
+                        Label::new(format!("Endpoint: {endpoint}\nUse an unprivileged port from 1 to 65535. Saving settings restarts the embedded MCP service on the new port."))
                             .text_sm(),
                     ),
             )
+    }
+
+    fn render_keybindings(&self, cx: &mut Context<Self>) -> Div {
+        let mut page = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap_5()
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap_4()
+                    .child(section_heading(
+                        "Keyboard shortcuts",
+                        "Shortcuts update when settings are saved. Create new adapts to the active workspace.",
+                    ))
+                    .child(
+                        Button::new("reset-keybindings")
+                            .outline()
+                            .small()
+                            .label("Restore defaults")
+                            .on_click(cx.listener(Self::reset_shortcuts)),
+                    ),
+            );
+
+        for category in ["Tabs", "Request", "Navigation"] {
+            let mut rows = div()
+                .w_full()
+                .rounded(cx.theme().radius_lg)
+                .border_1()
+                .border_color(cx.theme().border)
+                .overflow_hidden();
+            let commands = ShortcutCommand::ALL
+                .into_iter()
+                .filter(|command| command.category() == category)
+                .collect::<Vec<_>>();
+            for (index, command) in commands.iter().copied().enumerate() {
+                let binding = command.binding(&self.working.keybindings);
+                let key = Keystroke::parse(binding).ok();
+                let recording = self.recording_shortcut == Some(command);
+                let app = cx.entity();
+                let record_app = app.clone();
+                let clear_app = app.clone();
+                let change = Button::new(("record-shortcut", command as usize))
+                    .small()
+                    .when(recording, |button| button.primary())
+                    .when(!recording, |button| button.outline())
+                    .label(if recording { "Cancel" } else { "Change" })
+                    .on_click(move |_, window, cx| {
+                        record_app.update(cx, |this, cx| {
+                            this.begin_shortcut_recording(command, window, cx)
+                        });
+                    });
+                rows = rows.child(
+                    div()
+                        .w_full()
+                        .min_h(px(64.))
+                        .px_3()
+                        .py_2()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .when(index > 0, |this| {
+                            this.border_t_1().border_color(cx.theme().border)
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    Label::new(command.label())
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD),
+                                )
+                                .child(
+                                    Label::new(command.description())
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .w(px(126.))
+                                .flex_shrink_0()
+                                .flex()
+                                .justify_end()
+                                .child(match key {
+                                    Some(key) => Kbd::new(key).into_any_element(),
+                                    None => Label::new("Unassigned")
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .into_any_element(),
+                                }),
+                        )
+                        .child(change)
+                        .child(
+                            Button::new(("clear-shortcut", command as usize))
+                                .small()
+                                .ghost()
+                                .label("Clear")
+                                .disabled(binding.is_empty())
+                                .on_click(move |_, _, cx| {
+                                    clear_app
+                                        .update(cx, |this, cx| this.clear_shortcut(command, cx));
+                                }),
+                        ),
+                );
+            }
+            page = page
+                .child(Label::new(category).font_weight(FontWeight::SEMIBOLD))
+                .child(rows);
+        }
+        page.child(
+            Label::new("Escape closes gpui-components context menus and dialogs.")
+                .text_xs()
+                .text_color(cx.theme().muted_foreground),
+        )
     }
 
     fn render_interface(&self, cx: &mut Context<Self>) -> Div {
@@ -737,31 +958,63 @@ impl SettingsView {
             )
     }
 
-    fn render_theme_page(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    fn render_theme_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.theme_section;
-        let app = cx.entity();
-        let mut tabs = TabBar::new("theme-settings-tabs")
-            .segmented()
-            .small()
+        let mut tabs = div()
+            .id("theme-settings-tabs")
             .w_full()
-            .selected_index(current as usize)
-            .on_click(move |index, _, cx| {
-                if let Some(section) = ThemeSection::ALL.get(*index).copied() {
-                    app.update(cx, |this, cx| {
-                        this.theme_section = section;
-                        cx.notify();
-                    });
-                }
-            });
-        for section in ThemeSection::ALL {
-            tabs = tabs.child(Tab::new().flex_1().label(section.label()));
+            .flex_shrink_0()
+            .h(px(28.))
+            .p(px(2.))
+            .flex()
+            .items_center()
+            .gap(px(2.))
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().tab_bar_segmented);
+        for (index, section) in ThemeSection::ALL.into_iter().enumerate() {
+            let selected = current == section;
+            let app = cx.entity();
+            tabs = tabs.child(
+                div()
+                    .id(("theme-settings-tab", index))
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(22.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .overflow_hidden()
+                    .rounded(cx.theme().radius)
+                    .text_sm()
+                    .text_color(if selected {
+                        cx.theme().tab_active_foreground
+                    } else {
+                        cx.theme().tab_foreground
+                    })
+                    .when(selected, |this| this.bg(cx.theme().background).shadow_xs())
+                    .when(!selected, |this| {
+                        this.hover(|this| this.bg(cx.theme().background.opacity(0.5)))
+                    })
+                    .on_click(move |_, _, cx| {
+                        app.update(cx, |this, cx| {
+                            this.theme_section = section;
+                            cx.notify();
+                        });
+                    })
+                    .child(section.label()),
+            );
         }
-        let content = match current {
+        tabs
+    }
+
+    fn render_theme_content(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        match self.theme_section {
             ThemeSection::Interface => self.render_interface(cx),
             ThemeSection::Syntax => self.render_syntax(window, cx),
             ThemeSection::Import => self.render_import(cx),
-        };
-        div().flex().flex_col().gap_4().child(tabs).child(content)
+        }
     }
 }
 
@@ -772,6 +1025,10 @@ impl Render for SettingsView {
         let mut tabs = TabBar::new("settings-pages")
             .segmented()
             .w_full()
+            .h(px(34.))
+            .border_1()
+            .border_color(cx.theme().border)
+            .rounded(cx.theme().radius)
             .selected_index(current as usize)
             .on_click(move |index, _, cx| {
                 if let Some(page) = SettingsPage::ALL.get(*index).copied() {
@@ -787,7 +1044,8 @@ impl Render for SettingsView {
         let content = match current {
             SettingsPage::General => self.render_general(cx),
             SettingsPage::Agent => self.render_agent(cx),
-            SettingsPage::Theme => self.render_theme_page(window, cx),
+            SettingsPage::Keybindings => self.render_keybindings(cx),
+            SettingsPage::Theme => self.render_theme_content(window, cx),
         };
         div()
             .w_full()
@@ -795,14 +1053,21 @@ impl Render for SettingsView {
             .flex()
             .flex_col()
             .gap_4()
+            .track_focus(&self.shortcut_focus)
+            .on_key_down(cx.listener(Self::capture_shortcut))
             .child(tabs)
+            .when(current == SettingsPage::Theme, |this| {
+                this.child(self.render_theme_tabs(cx))
+            })
             .child(
                 div()
+                    .w_full()
+                    .min_w_0()
                     .flex_1()
                     .min_h_0()
                     .overflow_y_scrollbar()
                     .pr_2()
-                    .child(content),
+                    .child(div().w_full().min_w_0().child(content)),
             )
             .when_some(self.status.clone(), |this, (success, message)| {
                 this.child(Label::new(message).text_xs().text_color(if success {

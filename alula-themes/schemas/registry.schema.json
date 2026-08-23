@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Alula community theme registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "updated_at", "themes"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "updated_at": { "type": "string", "format": "date" },
+    "themes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/theme" }
+    }
+  },
+  "$defs": {
+    "hexColor": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"
+    },
+    "httpsUrl": {
+      "type": "string",
+      "pattern": "^https://"
+    },
+    "theme": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "author",
+        "description",
+        "mode",
+        "license",
+        "license_url",
+        "source_url",
+        "file",
+        "tags",
+        "preview"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "author": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "mode": { "enum": ["light", "dark"] },
+        "license": { "type": "string", "minLength": 1 },
+        "license_url": { "$ref": "#/$defs/httpsUrl" },
+        "source_url": { "$ref": "#/$defs/httpsUrl" },
+        "file": {
+          "type": "string",
+          "pattern": "^themes/[a-z0-9]+(?:-[a-z0-9]+)*\\.toml$"
+        },
+        "tags": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "preview": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["background", "foreground", "accent", "primary"],
+          "properties": {
+            "background": { "$ref": "#/$defs/hexColor" },
+            "foreground": { "$ref": "#/$defs/hexColor" },
+            "accent": { "$ref": "#/$defs/hexColor" },
+            "primary": { "$ref": "#/$defs/hexColor" }
+          }
+        }
+      }
+    }
+  }
+}

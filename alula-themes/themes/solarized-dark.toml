@@ -1,0 +1,43 @@
+version = 1
+
+[theme]
+name = "Solarized Dark"
+mode = "dark"
+radius = 6
+radius_large = 8
+
+[theme.colors]
+background = "#002b36"
+surface = "#073642"
+foreground = "#839496"
+muted_foreground = "#93a1a1"
+border = "#586e75"
+accent = "#268bd2"
+accent_foreground = "#fdf6e3"
+primary = "#2aa198"
+primary_foreground = "#002b36"
+sidebar = "#00252e"
+sidebar_foreground = "#93a1a1"
+selection = "#073642"
+success = "#859900"
+warning = "#b58900"
+danger = "#dc322f"
+info = "#268bd2"
+
+[syntax]
+editor_background = "#002b36"
+editor_foreground = "#839496"
+comment = "#586e75"
+keyword = "#859900"
+string = "#2aa198"
+number = "#d33682"
+function = "#268bd2"
+type_color = "#b58900"
+variable = "#839496"
+property = "#2aa198"
+tag = "#268bd2"
+attribute = "#b58900"
+boolean = "#d33682"
+constant = "#cb4b16"
+punctuation = "#657b83"
+operator = "#6c71c4"

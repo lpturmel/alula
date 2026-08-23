@@ -1,0 +1,13 @@
+include = ["registry.toml", "themes/*.toml"]
+
+[[rule]]
+include = ["registry.toml"]
+
+[rule.schema]
+path = "schemas/registry.schema.json"
+
+[[rule]]
+include = ["themes/*.toml"]
+
+[rule.schema]
+path = "schemas/theme.schema.json"

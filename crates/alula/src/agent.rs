@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use crate::{
     config::{AppConfig, import_editor_theme},
     model::{HttpMethod, KeyValueField, RequestDraft, Workspace},
-    persistence::{EnvironmentStore, HistoryStore},
+    persistence::{EnvironmentStore, EnvironmentVariable, HistoryStore},
+    variables::{delete_secret, store_secret, valid_variable_name},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,7 +59,7 @@ pub struct AgentReply {
 }
 
 impl AgentReply {
-    pub(crate) fn success(message: impl Into<String>, data: impl Serialize) -> Self {
+    pub fn success(message: impl Into<String>, data: impl Serialize) -> Self {
         Self {
             ok: true,
             message: message.into(),
@@ -66,7 +67,7 @@ impl AgentReply {
         }
     }
 
-    pub(crate) fn error(message: impl Into<String>) -> Self {
+    pub fn error(message: impl Into<String>) -> Self {
         Self {
             ok: false,
             message: message.into(),
@@ -91,6 +92,12 @@ pub enum EnvironmentAgentCommand {
     ListEnvironments,
     CreateEnvironment {
         name: String,
+    },
+    SetVariable {
+        environment_id: String,
+        name: String,
+        value: String,
+        secret: Option<bool>,
     },
     AssignRequest {
         environment_id: String,
@@ -132,6 +139,7 @@ pub fn apply_theme_agent_command(
             Ok(mut theme) => {
                 theme.application = current.application.clone();
                 theme.agent = current.agent.clone();
+                theme.keybindings = current.keybindings.clone();
                 *current = theme;
                 AgentReply::success(
                     "theme preview applied; call save_theme to persist it",
@@ -144,6 +152,7 @@ pub fn apply_theme_agent_command(
             Ok(mut theme) => {
                 theme.application = current.application.clone();
                 theme.agent = current.agent.clone();
+                theme.keybindings = current.keybindings.clone();
                 match theme.save(config_path) {
                     Ok(()) => {
                         *current = theme;
@@ -161,6 +170,7 @@ pub fn apply_theme_agent_command(
             Ok(mut theme) => {
                 theme.application = current.application.clone();
                 theme.agent = current.agent.clone();
+                theme.keybindings = current.keybindings.clone();
                 if save.unwrap_or(false)
                     && let Err(error) = theme.save(config_path)
                 {
@@ -180,7 +190,7 @@ pub fn theme_authoring_schema() -> Value {
         "format": "TOML",
         "version": 1,
         "requirements": [
-            "Return a complete configuration, including [theme], [theme.colors], and [syntax]. Application and agent settings are preserved by theme tools.",
+            "Return a complete configuration, including [theme], [theme.colors], and [syntax]. Application, agent, and keybinding settings are preserved by theme tools.",
             "Every color must be #RRGGBB or #RRGGBBAA.",
             "Keep text/background and accent/foreground pairs accessible.",
             "Theme mode must be light or dark."
@@ -268,6 +278,78 @@ pub fn apply_environment_agent_command(
             }
             let id = environments.create(name);
             AgentReply::success("environment created", json!({ "environment_id": id }))
+        }
+        EnvironmentAgentCommand::SetVariable {
+            environment_id,
+            name,
+            value,
+            secret,
+        } => {
+            let name = name.trim();
+            if !valid_variable_name(name) {
+                return AgentReply::error(
+                    "variable names must start with a letter or underscore and contain only letters, numbers, _, -, or .",
+                );
+            }
+            let Some(environment) = environments
+                .environments
+                .iter_mut()
+                .find(|environment| environment.id == environment_id)
+            else {
+                return AgentReply::error("environment not found");
+            };
+            let existing = environment
+                .variables
+                .iter()
+                .find(|variable| variable.name == name)
+                .cloned();
+            let is_secret = secret.unwrap_or(false);
+            let mut variable = if is_secret {
+                EnvironmentVariable::secret(name, Some(value))
+            } else {
+                EnvironmentVariable::public(name, value)
+            };
+            if let Some(existing) = &existing {
+                variable.id.clone_from(&existing.id);
+            }
+            if is_secret {
+                if let Err(error) = store_secret(
+                    &environment_id,
+                    &variable.id,
+                    variable.value.as_deref().unwrap_or_default(),
+                ) {
+                    return AgentReply::error(format!(
+                        "could not store variable securely: {error:#}"
+                    ));
+                }
+            } else if existing.as_ref().is_some_and(|variable| variable.secret)
+                && let Err(error) = delete_secret(&environment_id, &variable.id)
+            {
+                return AgentReply::error(format!("could not remove old secret: {error:#}"));
+            }
+            let variable_id = variable.id.clone();
+            if let Some(position) = environment
+                .variables
+                .iter()
+                .position(|item| item.id == variable_id)
+            {
+                environment.variables[position] = variable;
+            } else {
+                environment.variables.push(variable);
+            }
+            AgentReply::success(
+                if existing.is_some() {
+                    "environment variable updated"
+                } else {
+                    "environment variable created"
+                },
+                json!({
+                    "environment_id": environment_id,
+                    "variable_id": variable_id,
+                    "name": name,
+                    "secret": is_secret,
+                }),
+            )
         }
         EnvironmentAgentCommand::AssignRequest {
             environment_id,
@@ -359,6 +441,10 @@ fn upsert_field(
     }
 }
 
+/// Number of contracts returned by [`mcp_tools`]. Kept separately so UI paint
+/// paths do not allocate and construct every JSON schema merely to show a badge.
+pub const MCP_TOOL_COUNT: usize = 16;
+
 /// MCP-compatible tool descriptors. A transport adapter can publish these over
 /// stdio or Streamable HTTP without coupling the app core to a model vendor.
 pub fn mcp_tools() -> Vec<Value> {
@@ -389,9 +475,43 @@ pub fn mcp_tools() -> Vec<Value> {
                 "required": ["request_id", "patch"],
                 "properties": {
                     "request_id": { "type": "string" },
-                    "patch": { "type": "object" }
+                    "patch": {
+                        "type": "object",
+                        "properties": {
+                            "name": { "type": "string" },
+                            "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] },
+                            "url": { "type": "string" },
+                            "body": { "type": "string" },
+                            "headers": { "$ref": "#/$defs/keyValueFields" },
+                            "parameters": { "$ref": "#/$defs/keyValueFields" }
+                        },
+                        "additionalProperties": false
+                    }
                 },
-                "additionalProperties": false
+                "additionalProperties": false,
+                "$defs": {
+                    "keyValueFields": {
+                        "oneOf": [
+                            {
+                                "type": "object",
+                                "additionalProperties": { "type": "string" }
+                            },
+                            {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "required": ["key", "value"],
+                                    "properties": {
+                                        "key": { "type": "string" },
+                                        "value": { "type": "string" },
+                                        "enabled": { "type": "boolean", "default": true }
+                                    },
+                                    "additionalProperties": false
+                                }
+                            }
+                        ]
+                    }
+                }
             }
         }),
         json!({
@@ -417,6 +537,21 @@ pub fn mcp_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object", "required": ["name"],
                 "properties": { "name": { "type": "string" } },
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
+        }),
+        json!({
+            "name": "set_environment_variable",
+            "description": "Create or update a variable in an environment. Secret values are stored in the OS credential store and are never written to environment files.",
+            "inputSchema": {
+                "type": "object", "required": ["environment_id", "name", "value"],
+                "properties": {
+                    "environment_id": { "type": "string" },
+                    "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$" },
+                    "value": { "type": "string" },
+                    "secret": { "type": "boolean", "default": false }
+                },
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
@@ -520,6 +655,11 @@ mod tests {
     use super::*;
 
     #[test]
+    fn advertised_tool_count_stays_in_sync() {
+        assert_eq!(mcp_tools().len(), MCP_TOOL_COUNT);
+    }
+
+    #[test]
     fn commands_edit_requests_by_stable_id() {
         let mut workspace = Workspace::default();
         let id = workspace.active_request_id.clone();
@@ -553,6 +693,7 @@ mod tests {
         let path = directory.join("config.toml");
         let mut theme = AppConfig::default();
         theme.agent.port = 43_210;
+        theme.keybindings.send_request = "secondary-shift-enter".into();
         let mut authored = AppConfig::default();
         authored.theme.name = "Agent Violet".into();
         authored.theme.colors.accent = "#8b5cf6".into();
@@ -569,6 +710,7 @@ mod tests {
         assert!(preview.ok);
         assert_eq!(theme.theme.name, "Agent Violet");
         assert_eq!(theme.agent.port, 43_210);
+        assert_eq!(theme.keybindings.send_request, "secondary-shift-enter");
         assert!(!path.exists());
 
         let save = apply_theme_agent_command(
@@ -581,6 +723,7 @@ mod tests {
         assert_eq!(saved.theme, authored.theme);
         assert_eq!(saved.syntax, authored.syntax);
         assert_eq!(saved.agent.port, 43_210);
+        assert_eq!(saved.keybindings.send_request, "secondary-shift-enter");
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -612,5 +755,46 @@ mod tests {
         assert!(assigned.ok);
         assert_eq!(environments.environments[0].requests.len(), 1);
         assert!(history.entries.is_empty());
+    }
+
+    #[test]
+    fn agent_can_create_and_update_public_environment_variables() {
+        let workspace = Workspace::default();
+        let mut environments = EnvironmentStore::default();
+        let environment_id = environments.create("Staging");
+
+        let created = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::SetVariable {
+                environment_id: environment_id.clone(),
+                name: "api_url".into(),
+                value: "https://api.stag.example.com".into(),
+                secret: Some(false),
+            },
+        );
+        assert!(created.ok);
+        let variable_id = created.data.unwrap()["variable_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let updated = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::SetVariable {
+                environment_id,
+                name: "api_url".into(),
+                value: "https://api.stag.compile.sh".into(),
+                secret: None,
+            },
+        );
+        assert!(updated.ok);
+        assert_eq!(environments.environments[0].variables.len(), 1);
+        assert_eq!(environments.environments[0].variables[0].id, variable_id);
+        assert_eq!(
+            environments.environments[0].variables[0].value.as_deref(),
+            Some("https://api.stag.compile.sh")
+        );
     }
 }

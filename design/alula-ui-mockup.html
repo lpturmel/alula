@@ -1,0 +1,948 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Alula desktop UI design language mockup" />
+  <title>Alula — UI Design Language</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --canvas: #08090c;
+      --canvas-glow: #18182b;
+      --app: #0d0e13;
+      --surface-1: #111218;
+      --surface-2: #171820;
+      --surface-3: #1d1e27;
+      --surface-hover: #22232d;
+      --text-1: #f3f3f6;
+      --text-2: #a7a8b2;
+      --text-3: #737580;
+      --line: #282a34;
+      --line-strong: #373945;
+      --accent: #8c82ff;
+      --accent-soft: #8c82ff1f;
+      --accent-hover: #9c94ff;
+      --green: #6ed89a;
+      --green-soft: #6ed89a18;
+      --amber: #f1bd6c;
+      --red: #ff7878;
+      --cyan: #72c7e8;
+      --method: #78d9a5;
+      --code-key: #b7adff;
+      --code-string: #8bd6ae;
+      --code-number: #f1c982;
+      --shadow-app: 0 28px 90px rgba(0, 0, 0, .48), 0 0 0 1px rgba(255,255,255,.025);
+      --shadow-float: 0 18px 45px rgba(0,0,0,.34), 0 2px 8px rgba(0,0,0,.2);
+      --radius-sm: 6px;
+      --radius-md: 9px;
+      --radius-lg: 13px;
+      --ease-out: cubic-bezier(.2, .8, .2, 1);
+      --fast: 120ms;
+      --state: 180ms;
+      --enter: 280ms;
+      --sidebar: 224px;
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    html[data-theme="light"] {
+      color-scheme: light;
+      --canvas: #eeedf2;
+      --canvas-glow: #dcd9f1;
+      --app: #fafafd;
+      --surface-1: #f5f4f8;
+      --surface-2: #ffffff;
+      --surface-3: #edecf2;
+      --surface-hover: #e7e5ed;
+      --text-1: #1b1b22;
+      --text-2: #62636d;
+      --text-3: #90919a;
+      --line: #dedde5;
+      --line-strong: #cccbd5;
+      --accent: #695eea;
+      --accent-soft: #695eea16;
+      --accent-hover: #5549d8;
+      --green: #248c55;
+      --green-soft: #248c5512;
+      --amber: #a86b13;
+      --red: #cf4747;
+      --cyan: #247fa1;
+      --method: #248c55;
+      --code-key: #6658d2;
+      --code-string: #237b50;
+      --code-number: #9b6515;
+      --shadow-app: 0 26px 75px rgba(42, 39, 57, .16), 0 0 0 1px rgba(40,38,52,.05);
+      --shadow-float: 0 18px 38px rgba(42, 39, 57, .16), 0 2px 8px rgba(42,39,57,.08);
+    }
+
+    * { box-sizing: border-box; }
+    button, input { font: inherit; }
+    button { color: inherit; }
+    body {
+      min-width: 760px;
+      min-height: 100vh;
+      margin: 0;
+      overflow: hidden;
+      color: var(--text-1);
+      background:
+        radial-gradient(circle at 50% -15%, var(--canvas-glow), transparent 45%),
+        var(--canvas);
+    }
+
+    .noise {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: .22;
+      background-image: radial-gradient(circle, rgba(255,255,255,.12) .45px, transparent .55px);
+      background-size: 5px 5px;
+      mask-image: linear-gradient(to bottom, black, transparent 72%);
+    }
+
+    .page {
+      height: 100vh;
+      padding: clamp(12px, 2.1vw, 30px);
+      display: grid;
+      place-items: center;
+    }
+
+    .app {
+      width: min(1500px, 100%);
+      height: min(920px, 100%);
+      min-height: 700px;
+      display: grid;
+      grid-template-rows: 52px minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: var(--app);
+      box-shadow: var(--shadow-app);
+      animation: app-in 360ms var(--ease-out) both;
+    }
+
+    @keyframes app-in {
+      from { opacity: 0; transform: translateY(8px) scale(.994); }
+      to { opacity: 1; transform: none; }
+    }
+
+    .topbar {
+      position: relative;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: var(--sidebar) 1fr auto;
+      align-items: center;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-1);
+      transition: grid-template-columns var(--state) var(--ease-out);
+    }
+
+    .brand {
+      height: 100%;
+      padding: 0 15px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-right: 1px solid var(--line);
+    }
+
+    .mark {
+      width: 27px;
+      height: 27px;
+      position: relative;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 8px;
+      background: var(--accent);
+      color: #fff;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.14);
+      font-weight: 760;
+      font-size: 13px;
+      letter-spacing: -.04em;
+    }
+
+    .mark::after {
+      content: "";
+      position: absolute;
+      width: 22px;
+      height: 7px;
+      left: -6px;
+      bottom: 1px;
+      border-radius: 100%;
+      background: rgba(255,255,255,.28);
+      transform: rotate(-24deg);
+    }
+
+    .brand-name { font-size: 14px; font-weight: 670; letter-spacing: -.015em; }
+    .brand-version { margin-left: auto; color: var(--text-3); font: 10px ui-monospace, monospace; }
+
+    .crumbs {
+      min-width: 0;
+      padding: 0 18px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-2);
+      font-size: 12px;
+    }
+
+    .crumbs strong { color: var(--text-1); font-weight: 560; }
+    .crumb-sep { color: var(--text-3); }
+
+    .top-actions {
+      padding-right: 12px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .command-button, .icon-button, .subtle-button, .copy-button, .segmented button,
+    .editor-tab, .nav-item, .request-tab, .new-request, .send-button, .method-select {
+      border: 0;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .command-button {
+      height: 30px;
+      padding: 0 9px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--text-2);
+      font-size: 11px;
+      transition: border-color var(--fast), background var(--fast), transform var(--fast);
+    }
+
+    .command-button:hover { border-color: var(--line-strong); background: var(--surface-hover); transform: translateY(-1px); }
+    .keycap { color: var(--text-3); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+    .status-pill {
+      height: 27px;
+      padding: 0 9px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid color-mix(in srgb, var(--green) 24%, var(--line));
+      border-radius: 999px;
+      background: var(--green-soft);
+      color: var(--green);
+      font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: nowrap;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 12%, transparent);
+      animation: breathe 2.4s ease-in-out infinite;
+    }
+
+    @keyframes breathe { 50% { opacity: .58; transform: scale(.82); } }
+
+    .icon-button, .subtle-button, .copy-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--text-2);
+      transition: color var(--fast), background var(--fast), border-color var(--fast), transform var(--fast);
+    }
+
+    .icon-button { width: 30px; height: 30px; font-size: 13px; }
+    .icon-button:hover, .subtle-button:hover, .copy-button:hover { color: var(--text-1); background: var(--surface-hover); border-color: var(--line); }
+    .icon-button:active, .subtle-button:active, .copy-button:active { transform: scale(.96); }
+
+    .app-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: var(--sidebar) minmax(0, 1fr);
+      transition: grid-template-columns var(--state) var(--ease-out);
+    }
+
+    .sidebar {
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+      background: var(--surface-1);
+      opacity: 1;
+      transition: opacity var(--fast), transform var(--state) var(--ease-out);
+    }
+
+    .sidebar-inner { width: var(--sidebar); height: 100%; padding: 12px 10px; display: flex; flex-direction: column; }
+
+    .new-request {
+      width: 100%;
+      height: 34px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-md);
+      background: var(--surface-2);
+      color: var(--text-1);
+      font-size: 12px;
+      font-weight: 560;
+      text-align: left;
+      box-shadow: 0 1px 0 rgba(255,255,255,.025) inset;
+      transition: transform var(--fast), border-color var(--fast), background var(--fast);
+    }
+
+    .new-request:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); background: var(--surface-3); }
+    .new-request .shortcut { margin-left: auto; color: var(--text-3); font: 9px ui-monospace, monospace; }
+    .plus { font-size: 16px; color: var(--accent); line-height: 1; }
+
+    .nav-section { margin-top: 18px; }
+    .nav-label { padding: 0 9px 7px; color: var(--text-3); font-size: 9px; font-weight: 680; letter-spacing: .09em; text-transform: uppercase; }
+    .nav-list { display: grid; gap: 2px; }
+
+    .nav-item {
+      position: relative;
+      width: 100%;
+      height: 31px;
+      padding: 0 9px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text-2);
+      font-size: 12px;
+      text-align: left;
+      transition: background var(--fast), color var(--fast), transform var(--fast);
+    }
+
+    .nav-item:hover { background: var(--surface-hover); color: var(--text-1); transform: translateX(1px); }
+    .nav-item.active { background: var(--accent-soft); color: var(--text-1); }
+    .nav-item.active::before {
+      content: "";
+      position: absolute;
+      left: -2px;
+      width: 2px;
+      height: 14px;
+      border-radius: 2px;
+      background: var(--accent);
+      box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+
+    .nav-icon { width: 14px; color: var(--text-3); font: 11px ui-monospace, monospace; text-align: center; }
+    .nav-item.active .nav-icon { color: var(--accent); }
+    .count { margin-left: auto; color: var(--text-3); font: 10px ui-monospace, monospace; }
+
+    .collection { margin-top: 2px; }
+    .collection .nav-item { padding-left: 32px; height: 29px; }
+    .method-mini { width: 27px; color: var(--green); font: 8px ui-monospace, monospace; }
+    .method-mini.post { color: var(--cyan); }
+    .method-mini.del { color: var(--red); }
+    .request-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .agent-card {
+      margin-top: auto;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: linear-gradient(145deg, var(--surface-2), var(--surface-1));
+    }
+
+    .agent-title { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 620; }
+    .agent-copy { margin: 7px 0 10px; color: var(--text-3); font-size: 10px; line-height: 1.45; }
+    .agent-link { color: var(--accent-hover); font-size: 10px; text-decoration: none; }
+
+    .workspace { min-width: 0; min-height: 0; display: grid; grid-template-rows: 42px minmax(0, 1fr); background: var(--app); }
+
+    .request-tabs {
+      min-width: 0;
+      display: flex;
+      align-items: stretch;
+      overflow: hidden;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-1);
+    }
+
+    .request-tab {
+      position: relative;
+      width: 190px;
+      min-width: 0;
+      padding: 0 11px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-right: 1px solid var(--line);
+      background: transparent;
+      color: var(--text-3);
+      font-size: 11px;
+      text-align: left;
+      transition: background var(--fast), color var(--fast);
+    }
+
+    .request-tab:hover { background: var(--surface-hover); color: var(--text-2); }
+    .request-tab.active { background: var(--app); color: var(--text-1); }
+    .request-tab.active::after {
+      content: "";
+      position: absolute;
+      inset: auto 14px -1px;
+      height: 2px;
+      border-radius: 2px 2px 0 0;
+      background: var(--accent);
+      animation: line-in var(--state) var(--ease-out) both;
+    }
+
+    @keyframes line-in { from { opacity: 0; transform: scaleX(.35); } }
+    .tab-method { color: var(--method); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+    .request-tab[data-method="POST"] .tab-method { color: var(--cyan); }
+    .tab-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tab-close { color: var(--text-3); font-size: 12px; opacity: 0; transition: opacity var(--fast); }
+    .request-tab:hover .tab-close, .request-tab.active .tab-close { opacity: 1; }
+    .tab-add { align-self: center; margin-left: 5px; }
+
+    .work-scroll {
+      min-height: 0;
+      padding: 16px;
+      display: grid;
+      grid-template-rows: auto minmax(250px, .86fr) minmax(260px, 1.14fr);
+      gap: 12px;
+      overflow: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+
+    .composer {
+      position: relative;
+      height: 43px;
+      display: grid;
+      grid-template-columns: 104px minmax(0, 1fr) 94px;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius-md);
+      background: var(--surface-2);
+      box-shadow: 0 1px 0 rgba(255,255,255,.02) inset;
+      transition: border-color var(--state), box-shadow var(--state);
+    }
+
+    .composer:focus-within { border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); box-shadow: 0 0 0 3px var(--accent-soft); }
+    .method-select { padding: 0 13px; display: flex; align-items: center; gap: 8px; border-right: 1px solid var(--line); background: transparent; color: var(--method); font: 11px ui-monospace, monospace; font-weight: 720; }
+    .chevron { margin-left: auto; color: var(--text-3); font-size: 9px; }
+    .url-input { min-width: 0; padding: 0 13px; border: 0; outline: none; background: transparent; color: var(--text-1); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .url-input::selection { background: var(--accent-soft); }
+
+    .send-button {
+      margin: 4px;
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 650;
+      box-shadow: 0 1px 0 rgba(255,255,255,.16) inset;
+      transition: background var(--fast), transform var(--fast), box-shadow var(--fast);
+    }
+
+    .send-button:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 1px 0 rgba(255,255,255,.16) inset, 0 5px 16px color-mix(in srgb, var(--accent) 22%, transparent); }
+    .send-button:active { transform: translateY(0) scale(.985); }
+    .send-arrow { font-size: 14px; transition: transform var(--fast) var(--ease-out); }
+    .send-button:hover .send-arrow { transform: translateX(2px); }
+    .send-button.loading { pointer-events: none; }
+    .send-button.loading .send-label { opacity: .72; }
+    .send-button.loading .send-arrow { animation: send-flight 620ms var(--ease-out) infinite; }
+    @keyframes send-flight { 0% { opacity: 0; transform: translateX(-5px); } 35% { opacity: 1; } 100% { opacity: 0; transform: translateX(8px); } }
+
+    .send-progress { position: absolute; left: 0; bottom: 0; width: 0; height: 2px; background: rgba(255,255,255,.8); }
+    .loading .send-progress { animation: progress 760ms var(--ease-out) both; }
+    @keyframes progress { to { width: 100%; } }
+
+    .panel {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: var(--surface-1);
+    }
+
+    .panel-bar {
+      min-height: 43px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .editor-tabs { height: 100%; display: flex; align-items: stretch; gap: 16px; }
+    .editor-tab {
+      position: relative;
+      padding: 0 1px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: transparent;
+      color: var(--text-3);
+      font-size: 11px;
+      transition: color var(--fast);
+    }
+
+    .editor-tab:hover { color: var(--text-2); }
+    .editor-tab.active { color: var(--text-1); }
+    .editor-tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent); animation: line-in var(--state) var(--ease-out); }
+    .tab-count { min-width: 17px; height: 16px; padding: 0 4px; display: grid; place-items: center; border-radius: 999px; background: var(--surface-3); color: var(--text-3); font: 9px ui-monospace, monospace; }
+
+    .panel-actions { display: flex; align-items: center; gap: 5px; }
+    .subtle-button, .copy-button { height: 27px; padding: 0 8px; gap: 6px; font-size: 10px; }
+    .subtle-button { color: var(--text-3); }
+    .copy-button { border-color: var(--line); background: var(--surface-2); }
+
+    .editor-body { min-height: 0; padding: 8px 12px 10px; overflow: auto; }
+    .editor-panel { display: none; animation: content-in var(--state) var(--ease-out) both; }
+    .editor-panel.active { display: block; }
+    @keyframes content-in { from { opacity: 0; transform: translateY(2px); } to { opacity: 1; transform: none; } }
+
+    .kv-header, .kv-row { display: grid; grid-template-columns: 22px minmax(130px, .8fr) minmax(180px, 1.2fr) 28px; gap: 8px; align-items: center; }
+    .kv-header { height: 23px; padding: 0 6px; color: var(--text-3); font-size: 9px; text-transform: uppercase; letter-spacing: .07em; }
+    .kv-row { min-height: 35px; padding: 2px 6px; border-radius: 7px; transition: background var(--fast); }
+    .kv-row:hover { background: var(--surface-2); }
+
+    .check { width: 13px; height: 13px; display: grid; place-items: center; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: white; font-size: 8px; }
+    .cell { min-width: 0; overflow: hidden; color: var(--text-2); font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .cell.key { color: var(--text-1); }
+    .row-remove { opacity: 0; color: var(--text-3); font-size: 12px; text-align: center; transition: opacity var(--fast); }
+    .kv-row:hover .row-remove { opacity: 1; }
+    .add-row { margin: 5px 6px 0; color: var(--text-3); font-size: 10px; background: none; border: 0; cursor: pointer; transition: color var(--fast); }
+    .add-row:hover { color: var(--accent-hover); }
+    .body-code { margin: 4px 0; color: var(--text-2); font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+
+    .response-panel { background: var(--surface-1); }
+    .response-title { display: flex; align-items: center; gap: 9px; font-size: 11px; font-weight: 620; }
+    .response-title::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
+    .response-tools { display: flex; align-items: center; gap: 7px; }
+
+    .segmented { height: 27px; padding: 2px; display: flex; border: 1px solid var(--line); border-radius: 7px; background: var(--app); }
+    .segmented button { min-width: 66px; padding: 0 8px; border-radius: 5px; background: transparent; color: var(--text-3); font-size: 9px; transition: background var(--fast), color var(--fast), box-shadow var(--fast); }
+    .segmented button.active { background: var(--surface-3); color: var(--text-1); box-shadow: 0 1px 3px rgba(0,0,0,.16); }
+
+    .response-meta { min-height: 35px; padding: 0 13px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--line); color: var(--text-3); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .response-status { display: flex; align-items: center; gap: 6px; color: var(--green); font-weight: 650; }
+    .response-status::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+    .meta-spacer { flex: 1; }
+    .content-type { color: var(--text-2); }
+
+    .code-wrap { min-height: 0; flex: 1; overflow: auto; background: var(--app); }
+    .code { min-width: 600px; margin: 0; padding: 12px 16px 18px; color: var(--text-2); font: 11px/1.68 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; counter-reset: line; }
+    .code-line { display: block; position: relative; padding-left: 36px; border-radius: 4px; transition: background var(--fast); }
+    .code-line:hover { background: var(--surface-2); }
+    .code-line::before { counter-increment: line; content: counter(line); position: absolute; left: 0; width: 22px; color: var(--text-3); text-align: right; opacity: .58; }
+    .code-line.flash { animation: code-flash 520ms ease-out; }
+    @keyframes code-flash { 20% { background: var(--green-soft); } }
+    .k { color: var(--code-key); }
+    .s { color: var(--code-string); }
+    .n { color: var(--code-number); }
+    .p { color: var(--text-3); }
+    .raw-view { display: none; padding: 14px 16px; color: var(--text-2); font: 11px/1.65 ui-monospace, monospace; white-space: pre-wrap; }
+    .response-panel.raw .code { display: none; }
+    .response-panel.raw .raw-view { display: block; }
+
+    .design-drawer {
+      position: fixed;
+      z-index: 40;
+      top: 50%;
+      right: clamp(12px, 2.1vw, 30px);
+      width: 326px;
+      max-height: calc(100vh - 60px);
+      padding: 14px;
+      overflow: auto;
+      border: 1px solid var(--line-strong);
+      border-radius: 14px;
+      background: var(--surface-2);
+      box-shadow: var(--shadow-float);
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(12px, -50%) scale(.98);
+      transition: opacity var(--state), transform var(--state) var(--ease-out);
+    }
+
+    .design-drawer.open { opacity: 1; pointer-events: auto; transform: translate(0, -50%) scale(1); }
+    .drawer-head { display: flex; align-items: center; justify-content: space-between; }
+    .drawer-eyebrow { color: var(--accent-hover); font: 9px ui-monospace, monospace; letter-spacing: .09em; text-transform: uppercase; }
+    .drawer-title { margin: 4px 0 0; font-size: 16px; letter-spacing: -.025em; }
+    .drawer-close { width: 27px; height: 27px; border: 0; border-radius: 6px; background: transparent; color: var(--text-3); cursor: pointer; }
+    .drawer-close:hover { background: var(--surface-hover); color: var(--text-1); }
+    .drawer-section { margin-top: 17px; padding-top: 14px; border-top: 1px solid var(--line); }
+    .drawer-label { margin-bottom: 9px; color: var(--text-3); font-size: 9px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    .principles { display: grid; gap: 8px; }
+    .principle { display: grid; grid-template-columns: 19px 1fr; gap: 7px; color: var(--text-2); font-size: 10px; line-height: 1.45; }
+    .principle span:first-child { color: var(--accent-hover); font: 9px ui-monospace, monospace; }
+    .palette { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+    .swatch { aspect-ratio: 1; border: 1px solid var(--line); border-radius: 6px; background: var(--swatch); }
+    .token-grid { display: grid; grid-template-columns: 1fr auto; gap: 7px; color: var(--text-2); font: 10px ui-monospace, monospace; }
+    .token-grid span:nth-child(even) { color: var(--text-3); }
+    .motion-row { display: grid; grid-template-columns: 58px 1fr 40px; align-items: center; gap: 8px; margin-top: 8px; color: var(--text-2); font-size: 10px; }
+    .motion-track { height: 4px; overflow: hidden; border-radius: 9px; background: var(--surface-3); }
+    .motion-track::after { content: ""; display: block; width: 45%; height: 100%; border-radius: inherit; background: var(--accent); animation: motion-demo var(--duration) var(--ease-out) infinite alternate; }
+    @keyframes motion-demo { to { transform: translateX(120%); } }
+    .drawer-note { margin-top: 14px; padding: 10px; border-radius: 8px; background: var(--accent-soft); color: var(--text-2); font-size: 10px; line-height: 1.5; }
+
+    .command-overlay {
+      position: fixed;
+      z-index: 50;
+      inset: 0;
+      display: grid;
+      place-items: start center;
+      padding-top: 15vh;
+      background: rgba(3,3,6,.42);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--fast);
+    }
+
+    .command-overlay.open { opacity: 1; pointer-events: auto; }
+    .command-menu { width: min(520px, calc(100vw - 40px)); padding: 8px; border: 1px solid var(--line-strong); border-radius: 13px; background: var(--surface-2); box-shadow: var(--shadow-float); transform: translateY(-7px) scale(.99); transition: transform var(--state) var(--ease-out); }
+    .command-overlay.open .command-menu { transform: none; }
+    .command-input { width: 100%; height: 39px; padding: 0 10px; border: 0; border-bottom: 1px solid var(--line); outline: 0; background: transparent; color: var(--text-1); font-size: 12px; }
+    .command-list { padding-top: 7px; display: grid; gap: 2px; }
+    .command-item { height: 34px; padding: 0 9px; display: flex; align-items: center; gap: 9px; border-radius: 7px; color: var(--text-2); font-size: 11px; }
+    .command-item.selected { background: var(--accent-soft); color: var(--text-1); }
+    .command-item .keycap { margin-left: auto; }
+
+    .toast {
+      position: fixed;
+      z-index: 60;
+      left: 50%;
+      bottom: 34px;
+      height: 34px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--surface-3);
+      box-shadow: var(--shadow-float);
+      color: var(--text-2);
+      font-size: 10px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translate(-50%, 7px);
+      transition: opacity var(--state), transform var(--state) var(--ease-out);
+    }
+
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    .toast-check { color: var(--green); }
+
+    .collapsed { --sidebar: 0px; }
+    .collapsed .brand { padding: 0; border-right-color: transparent; opacity: 0; pointer-events: none; }
+    .collapsed .sidebar { opacity: 0; transform: translateX(-8px); pointer-events: none; }
+
+    @media (max-width: 1050px) {
+      :root { --sidebar: 198px; }
+      .sidebar-inner { width: 198px; }
+      .command-button span:first-child { display: none; }
+      .command-button { gap: 0; }
+      .work-scroll { padding: 12px; }
+    }
+
+    @media (max-height: 770px) {
+      .page { padding: 8px; }
+      .app { border-radius: 12px; }
+      .agent-card { display: none; }
+      .work-scroll { grid-template-rows: auto minmax(215px, .82fr) minmax(220px, 1.18fr); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="noise" aria-hidden="true"></div>
+  <main class="page">
+    <section class="app" id="app" aria-label="Alula HTTP client mockup">
+      <header class="topbar">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">A</div>
+          <span class="brand-name">alula</span>
+          <span class="brand-version">0.3</span>
+        </div>
+        <div class="crumbs">
+          <button class="icon-button" id="sidebarToggle" aria-label="Toggle sidebar">☰</button>
+          <span>Workspace</span><span class="crumb-sep">/</span><strong id="breadcrumb">Requests</strong>
+        </div>
+        <div class="top-actions">
+          <button class="command-button" id="commandOpen"><span>Search or run a command</span><span class="keycap">⌘ K</span></button>
+          <span class="status-pill"><span class="status-dot"></span>MCP :37421</span>
+          <button class="icon-button" id="themeToggle" aria-label="Toggle color theme">◐</button>
+          <button class="icon-button" id="tokensOpen" aria-label="Open design notes">✦</button>
+        </div>
+      </header>
+
+      <div class="app-body">
+        <aside class="sidebar">
+          <div class="sidebar-inner">
+            <button class="new-request"><span class="plus">＋</span>New request<span class="shortcut">⌘ N</span></button>
+
+            <div class="nav-section">
+              <div class="nav-label">Workspace</div>
+              <nav class="nav-list" aria-label="Workspace">
+                <button class="nav-item active" data-section="Requests"><span class="nav-icon">↗</span>Requests<span class="count">3</span></button>
+                <button class="nav-item" data-section="Environments"><span class="nav-icon">◎</span>Environments<span class="count">2</span></button>
+                <button class="nav-item" data-section="History"><span class="nav-icon">↶</span>History<span class="count">24</span></button>
+              </nav>
+            </div>
+
+            <div class="nav-section">
+              <div class="nav-label">Open requests</div>
+              <div class="nav-list collection">
+                <button class="nav-item"><span class="method-mini">GET</span><span class="request-name">List users</span></button>
+                <button class="nav-item"><span class="method-mini post">POST</span><span class="request-name">Create session</span></button>
+                <button class="nav-item"><span class="method-mini del">DEL</span><span class="request-name">Revoke token</span></button>
+              </div>
+            </div>
+
+            <div class="agent-card">
+              <div class="agent-title"><span class="status-dot" style="color:var(--green)"></span>Agent access ready</div>
+              <p class="agent-copy">Inspect, edit, and send requests through typed MCP tools.</p>
+              <a class="agent-link" href="#" id="contractsLink">12 tool contracts →</a>
+            </div>
+          </div>
+        </aside>
+
+        <section class="workspace">
+          <div class="request-tabs" role="tablist" aria-label="Open requests">
+            <button class="request-tab active" role="tab" data-method="GET" data-url="https://api.alula.dev/v1/users?limit=20"><span class="tab-method">GET</span><span class="tab-name">List users</span><span class="tab-close">×</span></button>
+            <button class="request-tab" role="tab" data-method="POST" data-url="https://api.alula.dev/v1/sessions"><span class="tab-method">POST</span><span class="tab-name">Create session</span><span class="tab-close">×</span></button>
+            <button class="icon-button tab-add" aria-label="Add request tab">＋</button>
+          </div>
+
+          <div class="work-scroll">
+            <div class="composer">
+              <button class="method-select"><span id="methodLabel">GET</span><span class="chevron">⌄</span></button>
+              <input class="url-input" id="urlInput" aria-label="Request URL" value="https://api.alula.dev/v1/users?limit=20" spellcheck="false" />
+              <button class="send-button" id="sendButton"><span class="send-label">Send</span><span class="send-arrow">→</span><span class="send-progress"></span></button>
+            </div>
+
+            <section class="panel request-editor" aria-label="Request configuration">
+              <div class="panel-bar">
+                <div class="editor-tabs" role="tablist" aria-label="Request sections">
+                  <button class="editor-tab active" data-panel="params">Parameters<span class="tab-count">2</span></button>
+                  <button class="editor-tab" data-panel="headers">Headers<span class="tab-count">3</span></button>
+                  <button class="editor-tab" data-panel="body">Body</button>
+                </div>
+                <div class="panel-actions">
+                  <button class="subtle-button">Bulk edit</button>
+                  <button class="subtle-button">•••</button>
+                </div>
+              </div>
+              <div class="editor-body">
+                <div class="editor-panel active" data-content="params">
+                  <div class="kv-header"><span></span><span>Key</span><span>Value</span><span></span></div>
+                  <div class="kv-row"><span class="check">✓</span><span class="cell key">limit</span><span class="cell">20</span><span class="row-remove">×</span></div>
+                  <div class="kv-row"><span class="check">✓</span><span class="cell key">include</span><span class="cell">profile,activity</span><span class="row-remove">×</span></div>
+                  <button class="add-row">＋ Add parameter</button>
+                </div>
+                <div class="editor-panel" data-content="headers">
+                  <div class="kv-header"><span></span><span>Header</span><span>Value</span><span></span></div>
+                  <div class="kv-row"><span class="check">✓</span><span class="cell key">Accept</span><span class="cell">application/json</span><span class="row-remove">×</span></div>
+                  <div class="kv-row"><span class="check">✓</span><span class="cell key">Authorization</span><span class="cell">Bearer ••••••••••••</span><span class="row-remove">×</span></div>
+                  <div class="kv-row"><span class="check">✓</span><span class="cell key">X-Environment</span><span class="cell">development</span><span class="row-remove">×</span></div>
+                  <button class="add-row">＋ Add header</button>
+                </div>
+                <div class="editor-panel" data-content="body"><pre class="body-code"><span class="p">{</span>
+  <span class="k">"name"</span><span class="p">:</span> <span class="s">"Ari"</span><span class="p">,</span>
+  <span class="k">"scope"</span><span class="p">:</span> <span class="s">"developer"</span>
+<span class="p">}</span></pre></div>
+              </div>
+            </section>
+
+            <section class="panel response-panel" id="responsePanel" aria-label="Response">
+              <div class="panel-bar">
+                <div class="response-title">Response</div>
+                <div class="response-tools">
+                  <div class="segmented" aria-label="Response display mode">
+                    <button class="active" data-view="formatted">Formatted</button>
+                    <button data-view="raw">Raw</button>
+                  </div>
+                  <button class="copy-button" id="copyButton">⧉ <span>Copy</span></button>
+                </div>
+              </div>
+              <div class="response-meta">
+                <span class="response-status" id="responseStatus">200 OK</span>
+                <span id="timing">184 ms</span>
+                <span>1.42 KB</span>
+                <span class="meta-spacer"></span>
+                <span class="content-type">application/json</span>
+              </div>
+              <div class="code-wrap">
+                <pre class="code" aria-label="Formatted JSON response"><span class="code-line"><span class="p">{</span></span><span class="code-line">  <span class="k">"data"</span><span class="p">:</span> <span class="p">[</span></span><span class="code-line">    <span class="p">{</span></span><span class="code-line">      <span class="k">"id"</span><span class="p">:</span> <span class="s">"usr_01JY8D3N"</span><span class="p">,</span></span><span class="code-line">      <span class="k">"name"</span><span class="p">:</span> <span class="s">"Mina Chen"</span><span class="p">,</span></span><span class="code-line">      <span class="k">"role"</span><span class="p">:</span> <span class="s">"developer"</span><span class="p">,</span></span><span class="code-line">      <span class="k">"active"</span><span class="p">:</span> <span class="n">true</span></span><span class="code-line">    <span class="p">},</span></span><span class="code-line">    <span class="p">{</span> <span class="k">"id"</span><span class="p">:</span> <span class="s">"usr_01JY9A7K"</span><span class="p">,</span> <span class="k">"name"</span><span class="p">:</span> <span class="s">"Noah Ellis"</span><span class="p">,</span> <span class="k">"active"</span><span class="p">:</span> <span class="n">true</span> <span class="p">}</span></span><span class="code-line">  <span class="p">],</span></span><span class="code-line">  <span class="k">"next_cursor"</span><span class="p">:</span> <span class="s">"eyJwYWdlIjoyfQ"</span></span><span class="code-line"><span class="p">}</span></span></pre>
+                <pre class="raw-view">{"data":[{"id":"usr_01JY8D3N","name":"Mina Chen","role":"developer","active":true},{"id":"usr_01JY9A7K","name":"Noah Ellis","active":true}],"next_cursor":"eyJwYWdlIjoyfQ"}</pre>
+              </div>
+            </section>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <aside class="design-drawer" id="designDrawer" aria-label="Alula design notes">
+    <div class="drawer-head">
+      <div><div class="drawer-eyebrow">Design language / v0.1</div><h2 class="drawer-title">Quiet velocity</h2></div>
+      <button class="drawer-close" id="tokensClose" aria-label="Close design notes">×</button>
+    </div>
+
+    <div class="drawer-section">
+      <div class="drawer-label">Principles</div>
+      <div class="principles">
+        <div class="principle"><span>01</span><span><strong>Focus follows the request.</strong> Chrome recedes; the composer and response stay visually dominant.</span></div>
+        <div class="principle"><span>02</span><span><strong>Density without noise.</strong> One-pixel borders and small type separate regions before shadows do.</span></div>
+        <div class="principle"><span>03</span><span><strong>Color means action.</strong> Violet selects, green confirms, semantic colors identify methods and failures.</span></div>
+      </div>
+    </div>
+
+    <div class="drawer-section">
+      <div class="drawer-label">Core palette</div>
+      <div class="palette" aria-label="Color palette">
+        <span class="swatch" style="--swatch:var(--app)" title="App"></span>
+        <span class="swatch" style="--swatch:var(--surface-2)" title="Surface"></span>
+        <span class="swatch" style="--swatch:var(--text-1)" title="Text"></span>
+        <span class="swatch" style="--swatch:var(--accent)" title="Accent"></span>
+        <span class="swatch" style="--swatch:var(--green)" title="Success"></span>
+        <span class="swatch" style="--swatch:var(--red)" title="Danger"></span>
+      </div>
+    </div>
+
+    <div class="drawer-section">
+      <div class="drawer-label">GPUI-ready tokens</div>
+      <div class="token-grid"><span>space.unit</span><span>4 px</span><span>control.height</span><span>32 / 40 px</span><span>radius.control</span><span>6–9 px</span><span>radius.panel</span><span>13 px</span><span>border.default</span><span>1 px</span></div>
+    </div>
+
+    <div class="drawer-section">
+      <div class="drawer-label">Fast motion</div>
+      <div class="motion-row"><span>Hover</span><span class="motion-track" style="--duration:120ms"></span><span>120 ms</span></div>
+      <div class="motion-row"><span>State</span><span class="motion-track" style="--duration:180ms"></span><span>180 ms</span></div>
+      <div class="motion-row"><span>Enter</span><span class="motion-track" style="--duration:280ms"></span><span>280 ms</span></div>
+      <div class="drawer-note">GPUI translation: animate opacity, transforms, indicator bounds, and semantic color only. Avoid long ambient motion; preserve instant input response.</div>
+    </div>
+  </aside>
+
+  <div class="command-overlay" id="commandOverlay" role="dialog" aria-label="Command menu" aria-hidden="true">
+    <div class="command-menu">
+      <input class="command-input" id="commandInput" placeholder="Type a command…" autocomplete="off" />
+      <div class="command-list">
+        <div class="command-item selected"><span class="nav-icon">↗</span>Send current request<span class="keycap">⌘ ↵</span></div>
+        <div class="command-item"><span class="nav-icon">＋</span>Create new request<span class="keycap">⌘ N</span></div>
+        <div class="command-item"><span class="nav-icon">◎</span>Switch environment<span class="keycap">⌘ E</span></div>
+        <div class="command-item"><span class="nav-icon">✦</span>Open design notes</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status"><span class="toast-check">✓</span><span id="toastText">Response copied</span></div>
+
+  <script>
+    const root = document.documentElement;
+    const app = document.getElementById('app');
+    const toast = document.getElementById('toast');
+    const toastText = document.getElementById('toastText');
+    let toastTimer;
+
+    function showToast(message) {
+      toastText.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 1500);
+    }
+
+    document.getElementById('sidebarToggle').addEventListener('click', () => app.classList.toggle('collapsed'));
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      root.dataset.theme = root.dataset.theme === 'dark' ? 'light' : 'dark';
+    });
+
+    const drawer = document.getElementById('designDrawer');
+    document.getElementById('tokensOpen').addEventListener('click', () => drawer.classList.add('open'));
+    document.getElementById('tokensClose').addEventListener('click', () => drawer.classList.remove('open'));
+
+    const commandOverlay = document.getElementById('commandOverlay');
+    const commandInput = document.getElementById('commandInput');
+    function setCommand(open) {
+      commandOverlay.classList.toggle('open', open);
+      commandOverlay.setAttribute('aria-hidden', String(!open));
+      if (open) setTimeout(() => commandInput.focus(), 30);
+    }
+    document.getElementById('commandOpen').addEventListener('click', () => setCommand(true));
+    commandOverlay.addEventListener('click', event => { if (event.target === commandOverlay) setCommand(false); });
+    document.addEventListener('keydown', event => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setCommand(true); }
+      if (event.key === 'Escape') { setCommand(false); drawer.classList.remove('open'); }
+    });
+
+    document.querySelectorAll('.nav-item[data-section]').forEach(item => item.addEventListener('click', () => {
+      document.querySelectorAll('.nav-item[data-section]').forEach(other => other.classList.toggle('active', other === item));
+      document.getElementById('breadcrumb').textContent = item.dataset.section;
+      if (item.dataset.section !== 'Requests') showToast(`${item.dataset.section} design follows the same system`);
+    }));
+
+    document.querySelectorAll('.request-tab').forEach(tab => tab.addEventListener('click', event => {
+      if (event.target.classList.contains('tab-close')) return;
+      document.querySelectorAll('.request-tab').forEach(other => other.classList.toggle('active', other === tab));
+      document.getElementById('urlInput').value = tab.dataset.url;
+      document.getElementById('methodLabel').textContent = tab.dataset.method;
+      document.querySelector('.method-select').style.color = tab.dataset.method === 'POST' ? 'var(--cyan)' : 'var(--method)';
+    }));
+
+    document.querySelectorAll('.editor-tab').forEach(tab => tab.addEventListener('click', () => {
+      document.querySelectorAll('.editor-tab').forEach(other => other.classList.toggle('active', other === tab));
+      document.querySelectorAll('.editor-panel').forEach(panel => panel.classList.toggle('active', panel.dataset.content === tab.dataset.panel));
+    }));
+
+    const responsePanel = document.getElementById('responsePanel');
+    document.querySelectorAll('.segmented button').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('.segmented button').forEach(other => other.classList.toggle('active', other === button));
+      responsePanel.classList.toggle('raw', button.dataset.view === 'raw');
+    }));
+
+    const sendButton = document.getElementById('sendButton');
+    sendButton.addEventListener('click', () => {
+      if (sendButton.classList.contains('loading')) return;
+      sendButton.classList.add('loading');
+      sendButton.querySelector('.send-label').textContent = 'Sending';
+      document.getElementById('responseStatus').textContent = 'Connecting';
+      document.getElementById('timing').textContent = '— ms';
+      setTimeout(() => {
+        sendButton.classList.remove('loading');
+        sendButton.querySelector('.send-label').textContent = 'Send';
+        document.getElementById('responseStatus').textContent = '200 OK';
+        document.getElementById('timing').textContent = `${Math.floor(108 + Math.random() * 88)} ms`;
+        document.querySelectorAll('.code-line').forEach((line, index) => setTimeout(() => line.classList.add('flash'), index * 18));
+        setTimeout(() => document.querySelectorAll('.code-line').forEach(line => line.classList.remove('flash')), 850);
+        showToast('Response received');
+      }, 760);
+    });
+
+    document.getElementById('copyButton').addEventListener('click', event => {
+      const raw = document.querySelector('.raw-view').textContent.trim();
+      if (navigator.clipboard) navigator.clipboard.writeText(raw).catch(() => {});
+      event.currentTarget.querySelector('span').textContent = 'Copied';
+      showToast('Response copied');
+      setTimeout(() => event.currentTarget.querySelector('span').textContent = 'Copy', 1200);
+    });
+
+    document.getElementById('contractsLink').addEventListener('click', event => {
+      event.preventDefault();
+      showToast('Agent contracts opened');
+    });
+  </script>
+</body>
+</html>
