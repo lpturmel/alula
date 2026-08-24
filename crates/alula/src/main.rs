@@ -11,9 +11,9 @@ use alula::{
     WebSocketExecutor, WebSocketMessageSnapshot, WebSocketStreamEvent, Workspace,
     apply_environment_agent_command, apply_history_agent_command, apply_theme,
     apply_theme_agent_command, chunked_fenced_code_blocks, config_path, configured_key_bindings,
-    delete_secret, inspect_template, is_websocket_request, load_secret, reply_to_tool,
-    resolve_request, store_secret, syntax_language, trim_response_formatting_start,
-    valid_variable_name,
+    delete_secret, inspect_template, install_tls_crypto_provider, is_websocket_request,
+    load_secret, reply_to_tool, resolve_request, store_secret, syntax_language,
+    trim_response_formatting_start, valid_variable_name,
 };
 use anyhow::Result;
 use gpui::{prelude::*, *};
@@ -21,7 +21,7 @@ use gpui_component::{
     ActiveTheme as _, Colorize as _, Icon, IconName, IndexPath, Root, Selectable as _,
     Sizable as _, WindowExt as _,
     animation::cubic_bezier,
-    button::{Button, ButtonCustomVariant, ButtonVariants as _},
+    button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
     highlighter::{LanguageConfig, LanguageRegistry},
@@ -91,6 +91,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "icons/arrow-right.svg" => Some(include_bytes!("../assets/icons/arrow-right.svg")),
+            "icons/bot.svg" => Some(include_bytes!("../assets/icons/bot.svg")),
             "icons/check.svg" => Some(include_bytes!("../assets/icons/check.svg")),
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
@@ -98,8 +99,10 @@ impl AssetSource for Assets {
             "icons/globe.svg" => Some(include_bytes!("../assets/icons/globe.svg")),
             "icons/loader-circle.svg" => Some(include_bytes!("../assets/icons/loader-circle.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
+            "icons/palette.svg" => Some(include_bytes!("../assets/icons/palette.svg")),
             "icons/redo-2.svg" => Some(include_bytes!("../assets/icons/redo-2.svg")),
             "icons/settings.svg" => Some(include_bytes!("../assets/icons/settings.svg")),
+            "icons/settings-2.svg" => Some(include_bytes!("../assets/icons/settings-2.svg")),
             "icons/square-terminal.svg" => {
                 Some(include_bytes!("../assets/icons/square-terminal.svg"))
             }
@@ -114,6 +117,7 @@ impl AssetSource for Assets {
         }
         Ok([
             "arrow-right.svg",
+            "bot.svg",
             "check.svg",
             "chevron-down.svg",
             "close.svg",
@@ -121,8 +125,10 @@ impl AssetSource for Assets {
             "globe.svg",
             "loader-circle.svg",
             "plus.svg",
+            "palette.svg",
             "redo-2.svg",
             "settings.svg",
+            "settings-2.svg",
             "square-terminal.svg",
         ]
         .into_iter()
@@ -209,6 +215,12 @@ enum WorkspaceSection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvironmentDetailTab {
+    Requests,
+    Variables,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CreationDestination {
     Request,
     Environment,
@@ -219,14 +231,18 @@ enum PaletteCommand {
     SendRequest,
     NewRequest,
     SwitchEnvironment,
+    DeleteEnvironment,
+    DeleteHistoryEntry,
     OpenSettings,
 }
 
 impl PaletteCommand {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 6] = [
         Self::SendRequest,
         Self::NewRequest,
         Self::SwitchEnvironment,
+        Self::DeleteEnvironment,
+        Self::DeleteHistoryEntry,
         Self::OpenSettings,
     ];
 
@@ -235,6 +251,8 @@ impl PaletteCommand {
             Self::SendRequest => "Send current request",
             Self::NewRequest => "Create new request",
             Self::SwitchEnvironment => "Switch environment",
+            Self::DeleteEnvironment => "Delete environment…",
+            Self::DeleteHistoryEntry => "Delete history entry…",
             Self::OpenSettings => "Open settings",
         }
     }
@@ -244,6 +262,7 @@ impl PaletteCommand {
             Self::SendRequest => "↗",
             Self::NewRequest => "＋",
             Self::SwitchEnvironment => "◎",
+            Self::DeleteEnvironment | Self::DeleteHistoryEntry => "⌫",
             Self::OpenSettings => "✦",
         }
     }
@@ -253,6 +272,7 @@ impl PaletteCommand {
             Self::SendRequest => "⌘ ↵",
             Self::NewRequest => "⌘ N",
             Self::SwitchEnvironment => "⌘ E",
+            Self::DeleteEnvironment | Self::DeleteHistoryEntry => "",
             Self::OpenSettings => "⌘ ,",
         }
     }
@@ -289,6 +309,8 @@ mod command_palette_tests {
     fn command_filtering_is_case_insensitive_and_matches_labels() {
         assert!(PaletteCommand::NewRequest.matches("NEW"));
         assert!(PaletteCommand::SwitchEnvironment.matches("environment"));
+        assert!(PaletteCommand::DeleteEnvironment.matches("delete environment"));
+        assert!(PaletteCommand::DeleteHistoryEntry.matches("history"));
         assert!(!PaletteCommand::OpenSettings.matches("send"));
         assert!(
             PaletteCommand::ALL
@@ -1081,6 +1103,11 @@ struct AlulaApp {
     state_paths: StatePaths,
     persistence_dirty: Arc<AtomicBool>,
     environment_name: Entity<InputState>,
+    environment_search: Entity<InputState>,
+    environment_request_search: Entity<InputState>,
+    environment_variable_search: Entity<InputState>,
+    selected_environment_id: Option<String>,
+    environment_detail_tab: EnvironmentDetailTab,
     mcp_http: Option<McpHttpServer>,
     mcp_status: McpStatus,
     mcp_ui_tx: smol::channel::Sender<McpUiCall>,
@@ -1108,12 +1135,18 @@ enum McpStatus {
 impl CommandPaletteView {
     fn new(app: Entity<AlulaApp>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("Type a command…"));
-        cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                this.selected = 0;
-                cx.notify();
-            }
-        })
+        cx.subscribe_in(
+            &input,
+            window,
+            |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    this.selected = 0;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => this.confirm(window, cx),
+                _ => {}
+            },
+        )
         .detach();
         Self {
             app,
@@ -1162,7 +1195,6 @@ impl CommandPaletteView {
         match event.keystroke.key.as_str() {
             "up" => self.select_previous(cx),
             "down" => self.select_next(cx),
-            "enter" => self.confirm(window, cx),
             "escape" => window.close_dialog(cx),
             _ => return,
         }
@@ -1189,6 +1221,17 @@ impl CommandPaletteView {
                     this.select_workspace_section(WorkspaceSection::Environments, cx)
                 });
                 window.close_dialog(cx);
+            }
+            PaletteCommand::DeleteEnvironment => {
+                window.close_dialog(cx);
+                self.app.update(cx, |this, cx| {
+                    this.open_delete_environment_picker(window, cx)
+                });
+            }
+            PaletteCommand::DeleteHistoryEntry => {
+                window.close_dialog(cx);
+                self.app
+                    .update(cx, |this, cx| this.open_delete_history_picker(window, cx));
             }
             PaletteCommand::OpenSettings => {
                 window.close_dialog(cx);
@@ -1349,6 +1392,24 @@ impl AlulaApp {
         let (mcp_ui_tx, mcp_ui_rx) = smol::channel::unbounded();
         let (mcp_http, mcp_status) =
             Self::launch_mcp_http(theme_config.agent.port, &theme_path, mcp_ui_tx.clone());
+        let environment_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search environments…"));
+        let environment_request_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search requests…"));
+        let environment_variable_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search variables…"));
+        for input in [
+            &environment_search,
+            &environment_request_search,
+            &environment_variable_search,
+        ] {
+            cx.subscribe(input, |_, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            })
+            .detach();
+        }
         let app = Self {
             focus_handle,
             new_request_focus,
@@ -1372,6 +1433,11 @@ impl AlulaApp {
             persistence_dirty: Arc::new(AtomicBool::new(false)),
             environment_name: cx
                 .new(|cx| InputState::new(window, cx).placeholder("Production, Staging, Local…")),
+            environment_search,
+            environment_request_search,
+            environment_variable_search,
+            selected_environment_id: None,
+            environment_detail_tab: EnvironmentDetailTab::Requests,
             mcp_http,
             mcp_status,
             mcp_ui_tx,
@@ -1670,6 +1736,44 @@ impl AlulaApp {
                 }
                 reply
             }
+            "delete_environment" => {
+                let Some(environment_id) = arguments.get("environment_id").and_then(Value::as_str)
+                else {
+                    return reply_to_tool(AgentReply::error("environment_id must be a string"));
+                };
+                let affected_request_ids = self
+                    .environments
+                    .environments
+                    .iter()
+                    .find(|environment| environment.id == environment_id)
+                    .map(|environment| {
+                        environment
+                            .requests
+                            .iter()
+                            .map(|request| request.id.clone())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let workspace = self.workspace_snapshot(cx);
+                let reply = apply_environment_agent_command(
+                    &workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::DeleteEnvironment {
+                        environment_id: environment_id.to_owned(),
+                    },
+                );
+                if reply.ok {
+                    if self.selected_environment_id.as_deref() == Some(environment_id) {
+                        self.selected_environment_id = None;
+                    }
+                    for request_id in affected_request_ids {
+                        self.refresh_request_variable_names(&request_id, cx);
+                    }
+                    self.persistence_dirty.store(true, Ordering::Release);
+                    cx.notify();
+                }
+                reply
+            }
             "set_environment_variable" => {
                 let Some(environment_id) = arguments.get("environment_id").and_then(Value::as_str)
                 else {
@@ -1767,7 +1871,7 @@ impl AlulaApp {
                 reply
             }
             "list_history" => apply_history_agent_command(
-                &self.history,
+                &mut self.history,
                 HistoryAgentCommand::ListHistory {
                     limit: arguments
                         .get("limit")
@@ -1780,11 +1884,27 @@ impl AlulaApp {
                     return reply_to_tool(AgentReply::error("history_id must be a string"));
                 };
                 apply_history_agent_command(
-                    &self.history,
+                    &mut self.history,
                     HistoryAgentCommand::GetHistoryEntry {
                         history_id: history_id.to_owned(),
                     },
                 )
+            }
+            "delete_history_entry" => {
+                let Some(history_id) = arguments.get("history_id").and_then(Value::as_str) else {
+                    return reply_to_tool(AgentReply::error("history_id must be a string"));
+                };
+                let reply = apply_history_agent_command(
+                    &mut self.history,
+                    HistoryAgentCommand::DeleteHistoryEntry {
+                        history_id: history_id.to_owned(),
+                    },
+                );
+                if reply.ok {
+                    self.persistence_dirty.store(true, Ordering::Release);
+                    cx.notify();
+                }
+                reply
             }
             "get_theme" => apply_theme_agent_command(
                 &mut self.theme_config,
@@ -1943,13 +2063,21 @@ impl AlulaApp {
             AppConfig::load(&self.theme_path).unwrap_or_else(|_| self.theme_config.clone());
         let path = self.theme_path.clone();
         let settings = cx.new(|cx| SettingsView::new(config, path, window, cx));
+        let viewport = window.viewport_size();
         let save = settings.clone();
         let restore = settings.clone();
         let app = cx.entity();
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
                 .title(Label::new("Settings").font_weight(FontWeight::SEMIBOLD))
-                .w(px(860.))
+                .w(viewport.width)
+                .h(viewport.height)
+                // Dialog entrance settles 30 px below its configured top.
+                .margin_top(px(-30.))
+                .p_4()
+                .rounded_none()
+                .border_0()
+                .overlay(false)
                 .child(settings.clone())
                 .confirm()
                 .button_props(
@@ -2317,6 +2445,243 @@ impl AlulaApp {
                         });
                         true
                     }
+                })
+        });
+    }
+
+    fn open_delete_environment_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let environments = self.environments.environments.clone();
+        let app = cx.entity();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let mut choices = div()
+                .max_h(px(360.))
+                .overflow_y_scrollbar()
+                .flex()
+                .flex_col()
+                .gap_1();
+            if environments.is_empty() {
+                choices = choices.child(
+                    Label::new("There are no environments to delete.")
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground),
+                );
+            } else {
+                for environment in &environments {
+                    let row_app = app.clone();
+                    let environment_id = environment.id.clone();
+                    let environment_name = environment.name.clone();
+                    let request_count = environment.requests.len();
+                    choices = choices.child(
+                        Button::new(SharedString::from(format!(
+                            "palette-delete-environment-{environment_id}"
+                        )))
+                        .ghost()
+                        .w_full()
+                        .label(format!(
+                            "{}  ·  {} request{}",
+                            environment.name,
+                            request_count,
+                            if request_count == 1 { "" } else { "s" }
+                        ))
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            row_app.update(cx, |this, cx| {
+                                this.confirm_delete_environment(
+                                    environment_id.clone(),
+                                    environment_name.clone(),
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                    );
+                }
+            }
+            dialog
+                .title(Label::new("Delete environment").font_weight(FontWeight::SEMIBOLD))
+                .w(px(480.))
+                .child(choices)
+        });
+    }
+
+    fn confirm_delete_environment(
+        &mut self,
+        environment_id: String,
+        environment_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let app = cx.entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let delete_app = app.clone();
+            let delete_id = environment_id.clone();
+            let deleted_name = environment_name.clone();
+            dialog
+                .title(Label::new("Delete environment?").font_weight(FontWeight::SEMIBOLD))
+                .w(px(480.))
+                .child(
+                    Label::new(format!(
+                        "“{environment_name}” and all of its saved requests, variables, and secrets will be permanently deleted."
+                    ))
+                    .text_sm(),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("Delete environment")
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text("Cancel"),
+                )
+                .on_ok(move |_, window, cx| {
+                    delete_app.update(cx, |this, cx| {
+                        let affected_request_ids = this
+                            .environments
+                            .environments
+                            .iter()
+                            .find(|environment| environment.id == delete_id)
+                            .map(|environment| {
+                                environment
+                                    .requests
+                                    .iter()
+                                    .map(|request| request.id.clone())
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        let workspace = this.workspace_snapshot(cx);
+                        let reply = apply_environment_agent_command(
+                            &workspace,
+                            &mut this.environments,
+                            EnvironmentAgentCommand::DeleteEnvironment {
+                                environment_id: delete_id.clone(),
+                            },
+                        );
+                        if reply.ok {
+                            if this.selected_environment_id.as_deref() == Some(delete_id.as_str()) {
+                                this.selected_environment_id = None;
+                            }
+                            for request_id in affected_request_ids {
+                                this.refresh_request_variable_names(&request_id, cx);
+                            }
+                            this.persistence_dirty.store(true, Ordering::Release);
+                            window.push_notification(
+                                Notification::success(format!(
+                                    "Deleted environment “{deleted_name}”"
+                                )),
+                                cx,
+                            );
+                            cx.notify();
+                            true
+                        } else {
+                            window.push_notification(Notification::error(reply.message), cx);
+                            false
+                        }
+                    })
+                })
+        });
+    }
+
+    fn open_delete_history_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entries = self.history.entries.iter().cloned().collect::<Vec<_>>();
+        let app = cx.entity();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let mut choices = div()
+                .max_h(px(360.))
+                .overflow_y_scrollbar()
+                .flex()
+                .flex_col()
+                .gap_1();
+            if entries.is_empty() {
+                choices = choices.child(
+                    Label::new("There are no history entries to delete.")
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground),
+                );
+            } else {
+                for entry in &entries {
+                    let row_app = app.clone();
+                    let history_id = entry.id.clone();
+                    let display_name = entry.request.display_name();
+                    choices = choices.child(
+                        Button::new(SharedString::from(format!(
+                            "palette-delete-history-{history_id}"
+                        )))
+                        .ghost()
+                        .w_full()
+                        .label(format!(
+                            "{}  ·  {}  ·  {}",
+                            entry.request.method.as_str(),
+                            display_name,
+                            relative_history_time(entry.sent_at_unix_ms)
+                        ))
+                        .on_click(move |_, window, cx| {
+                            window.close_dialog(cx);
+                            row_app.update(cx, |this, cx| {
+                                this.confirm_delete_history_entry(
+                                    history_id.clone(),
+                                    display_name.clone(),
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                    );
+                }
+            }
+            dialog
+                .title(Label::new("Delete history entry").font_weight(FontWeight::SEMIBOLD))
+                .w(px(520.))
+                .child(choices)
+        });
+    }
+
+    fn confirm_delete_history_entry(
+        &mut self,
+        history_id: String,
+        display_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let app = cx.entity();
+        window.open_dialog(cx, move |dialog, _, _| {
+            let delete_app = app.clone();
+            let delete_id = history_id.clone();
+            dialog
+                .title(Label::new("Delete history entry?").font_weight(FontWeight::SEMIBOLD))
+                .w(px(460.))
+                .child(
+                    Label::new(format!(
+                        "The recorded execution for “{display_name}” will be permanently deleted."
+                    ))
+                    .text_sm(),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("Delete history entry")
+                        .ok_variant(ButtonVariant::Danger)
+                        .cancel_text("Cancel"),
+                )
+                .on_ok(move |_, window, cx| {
+                    delete_app.update(cx, |this, cx| {
+                        let reply = apply_history_agent_command(
+                            &mut this.history,
+                            HistoryAgentCommand::DeleteHistoryEntry {
+                                history_id: delete_id.clone(),
+                            },
+                        );
+                        if reply.ok {
+                            this.persistence_dirty.store(true, Ordering::Release);
+                            window.push_notification(
+                                Notification::success("History entry deleted"),
+                                cx,
+                            );
+                            cx.notify();
+                            true
+                        } else {
+                            window.push_notification(Notification::error(reply.message), cx);
+                            false
+                        }
+                    })
                 })
         });
     }
@@ -3510,7 +3875,6 @@ impl AlulaApp {
                             .px(px(10.))
                             .flex()
                             .items_center()
-                            .gap(px(9.))
                             .rounded(px(9.))
                             .border_1()
                             .border_color(if new_request_hovered {
@@ -3538,14 +3902,24 @@ impl AlulaApp {
                             })
                             .cursor_pointer()
                             .child(
-                                Icon::new(IconName::Plus)
-                                    .size(px(16.))
-                                    .text_color(cx.theme().primary),
+                                div()
+                                    .w(px(18.))
+                                    .mr_2()
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Icon::new(IconName::Plus)
+                                            .size(px(15.))
+                                            .text_color(cx.theme().muted_foreground),
+                                    ),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
+                                    .text_color(cx.theme().muted_foreground)
                                     .child("New request"),
                             )
                             .child(
@@ -3650,17 +4024,32 @@ impl AlulaApp {
                     .child(
                         div()
                             .mt_4()
-                            .px_2()
-                            .pb_1()
-                            .text_size(px(9.))
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(cx.theme().muted_foreground.opacity(0.64))
-                            .child("OPEN REQUESTS"),
+                            .flex_1()
+                            .min_h_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .px_2()
+                                    .pb_1()
+                                    .flex_shrink_0()
+                                    .text_size(px(9.))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(cx.theme().muted_foreground.opacity(0.64))
+                                    .child("OPEN REQUESTS"),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scrollbar()
+                                    .child(open_requests),
+                            ),
                     )
-                    .child(open_requests)
                     .child(
                         div()
-                            .mt_auto()
+                            .mt_3()
+                            .flex_shrink_0()
                             .p_3()
                             .rounded(cx.theme().radius)
                             .border_1()
@@ -3918,8 +4307,478 @@ impl AlulaApp {
             .children(keepalive_views)
     }
 
-    fn render_environments(&self, cx: &mut Context<Self>) -> Div {
+    fn open_environment_details(
+        &mut self,
+        environment_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selected_environment_id = Some(environment_id);
+        self.environment_detail_tab = EnvironmentDetailTab::Requests;
+        self.environment_request_search.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+        self.environment_variable_search.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+        cx.notify();
+    }
+
+    fn close_environment_details(&mut self, cx: &mut Context<Self>) {
+        self.selected_environment_id = None;
+        cx.notify();
+    }
+
+    fn render_environment_variable_rows(
+        &self,
+        environment: &alula::Environment,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let app = cx.entity();
+        let query = self
+            .environment_variable_search
+            .read(cx)
+            .value()
+            .trim()
+            .to_ascii_lowercase();
+        let variables = environment
+            .variables
+            .iter()
+            .filter(|variable| {
+                query.is_empty()
+                    || variable.name.to_ascii_lowercase().contains(&query)
+                    || (!variable.secret
+                        && variable
+                            .value
+                            .as_deref()
+                            .unwrap_or_default()
+                            .to_ascii_lowercase()
+                            .contains(&query))
+            })
+            .collect::<Vec<_>>();
+        if variables.is_empty() {
+            return empty_state(
+                if query.is_empty() {
+                    "No variables yet"
+                } else {
+                    "No matching variables"
+                },
+                if query.is_empty() {
+                    "Add a variable for use in request templates"
+                } else {
+                    "Try a different search"
+                },
+                cx,
+            );
+        }
+
+        let mut rows = div().flex().flex_col().gap_1();
+        for variable in variables {
+            let edit_app = app.clone();
+            let edit_environment_id = environment.id.clone();
+            let edit_variable_id = variable.id.clone();
+            let remove_app = app.clone();
+            let remove_environment_id = environment.id.clone();
+            let remove_variable_id = variable.id.clone();
+            let display_value = if variable.secret {
+                "••••••••".to_owned()
+            } else {
+                variable.value.clone().unwrap_or_default()
+            };
+            rows = rows.child(
+                div()
+                    .w_full()
+                    .h(px(42.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().sidebar)
+                    .child(
+                        div()
+                            .w(px(180.))
+                            .flex_shrink_0()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().primary)
+                            .child(format!("{{{{{}}}}}", variable.name)),
+                    )
+                    .child(
+                        Tag::secondary()
+                            .small()
+                            .rounded_full()
+                            .child(if variable.secret { "Secret" } else { "Public" }),
+                    )
+                    .child(
+                        Label::new(display_value)
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "edit-environment-variable-{}",
+                            variable.id
+                        )))
+                        .ghost()
+                        .small()
+                        .label("Edit")
+                        .on_click(move |_, window, cx| {
+                            edit_app.update(cx, |this, cx| {
+                                this.open_environment_variable_dialog(
+                                    edit_environment_id.clone(),
+                                    Some(edit_variable_id.clone()),
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "remove-environment-variable-{}",
+                            variable.id
+                        )))
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::Close)
+                        .tooltip("Remove variable")
+                        .on_click(move |_, window, cx| {
+                            remove_app.update(cx, |this, cx| {
+                                this.remove_environment_variable(
+                                    &remove_environment_id,
+                                    &remove_variable_id,
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                    ),
+            );
+        }
+        rows
+    }
+
+    fn render_environment_request_rows(
+        &self,
+        environment: &alula::Environment,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let app = cx.entity();
+        let query = self
+            .environment_request_search
+            .read(cx)
+            .value()
+            .trim()
+            .to_ascii_lowercase();
+        let requests = environment
+            .requests
+            .iter()
+            .filter(|request| {
+                query.is_empty()
+                    || request.display_name().to_ascii_lowercase().contains(&query)
+                    || request.url.to_ascii_lowercase().contains(&query)
+                    || request
+                        .method
+                        .as_str()
+                        .to_ascii_lowercase()
+                        .contains(&query)
+            })
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
+            return empty_state(
+                if query.is_empty() {
+                    "No requests yet"
+                } else {
+                    "No matching requests"
+                },
+                if query.is_empty() {
+                    "Right-click a request tab to add it here"
+                } else {
+                    "Try a different search"
+                },
+                cx,
+            );
+        }
+
+        let mut rows = div().flex().flex_col().gap_1();
+        for request in requests {
+            let open_app = app.clone();
+            let open_environment_id = environment.id.clone();
+            let open_request_id = request.id.clone();
+            rows = rows.child(
+                div()
+                    .w_full()
+                    .h(px(52.))
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded(cx.theme().radius_lg)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().sidebar)
+                    .hover(|this| {
+                        this.border_color(cx.theme().muted_foreground.opacity(0.32))
+                            .bg(cx.theme().muted)
+                    })
+                    .child(method_badge(request.method, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                Label::new(request.display_name())
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD),
+                            )
+                            .child(
+                                Label::new(request.url.clone())
+                                    .truncate()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground),
+                            ),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "open-environment-request-{}",
+                            request.id
+                        )))
+                        .outline()
+                        .small()
+                        .label("Open")
+                        .on_click(move |_, window, cx| {
+                            open_app.update(cx, |this, cx| {
+                                this.open_environment_request(
+                                    &open_environment_id,
+                                    &open_request_id,
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                    ),
+            );
+        }
+        rows
+    }
+
+    fn render_environment_detail(
+        &self,
+        environment: &alula::Environment,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let app = cx.entity();
+        let back_app = app.clone();
+        let delete_app = app.clone();
+        let delete_id = environment.id.clone();
+        let delete_name = environment.name.clone();
+        let requests_selected = self.environment_detail_tab == EnvironmentDetailTab::Requests;
+        let variables_selected = self.environment_detail_tab == EnvironmentDetailTab::Variables;
+        let request_tab_app = app.clone();
+        let variable_tab_app = app.clone();
+        let (search, rows, add_variable) = if requests_selected {
+            (
+                Input::new(&self.environment_request_search)
+                    .prefix(IconName::Search)
+                    .w_full(),
+                self.render_environment_request_rows(environment, cx),
+                None,
+            )
+        } else {
+            let add_app = app.clone();
+            let add_environment_id = environment.id.clone();
+            (
+                Input::new(&self.environment_variable_search)
+                    .prefix(IconName::Search)
+                    .w_full(),
+                self.render_environment_variable_rows(environment, cx),
+                Some(
+                    Button::new("environment-detail-add-variable")
+                        .primary()
+                        .small()
+                        .icon(IconName::Plus)
+                        .label("Add variable")
+                        .on_click(move |_, window, cx| {
+                            add_app.update(cx, |this, cx| {
+                                this.open_environment_variable_dialog(
+                                    add_environment_id.clone(),
+                                    None,
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                ),
+            )
+        };
+
+        div().size_full().min_h_0().p_4().child(
+            div()
+                .size_full()
+                .min_h_0()
+                .overflow_hidden()
+                .rounded(cx.theme().radius_lg)
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().sidebar)
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .h(px(64.))
+                        .px_4()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            Button::new("back-to-environments")
+                                .ghost()
+                                .small()
+                                .icon(IconName::ArrowLeft)
+                                .label("Back")
+                                .on_click(move |_, _, cx| {
+                                    back_app
+                                        .update(cx, |this, cx| this.close_environment_details(cx));
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    Label::new(environment.name.clone())
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_lg(),
+                                )
+                                .child(
+                                    Label::new(format!(
+                                        "{} requests · {} variables",
+                                        environment.requests.len(),
+                                        environment.variables.len()
+                                    ))
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground),
+                                ),
+                        )
+                        .child(
+                            Button::new("delete-environment-detail")
+                                .ml_auto()
+                                .danger()
+                                .small()
+                                .icon(IconName::Delete)
+                                .label("Delete")
+                                .on_click(move |_, window, cx| {
+                                    delete_app.update(cx, |this, cx| {
+                                        this.confirm_delete_environment(
+                                            delete_id.clone(),
+                                            delete_name.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .h(px(46.))
+                        .px_4()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_end()
+                        .gap_1()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            Button::new("environment-requests-tab")
+                                .ghost()
+                                .h(px(36.))
+                                .rounded_b_none()
+                                .label(format!("Requests ({})", environment.requests.len()))
+                                .when(requests_selected, |this| {
+                                    this.bg(cx.theme().accent).text_color(cx.theme().foreground)
+                                })
+                                .on_click(move |_, _, cx| {
+                                    request_tab_app.update(cx, |this, cx| {
+                                        this.environment_detail_tab =
+                                            EnvironmentDetailTab::Requests;
+                                        cx.notify();
+                                    });
+                                }),
+                        )
+                        .child(
+                            Button::new("environment-variables-tab")
+                                .ghost()
+                                .h(px(36.))
+                                .rounded_b_none()
+                                .label(format!("Variables ({})", environment.variables.len()))
+                                .when(variables_selected, |this| {
+                                    this.bg(cx.theme().accent).text_color(cx.theme().foreground)
+                                })
+                                .on_click(move |_, _, cx| {
+                                    variable_tab_app.update(cx, |this, cx| {
+                                        this.environment_detail_tab =
+                                            EnvironmentDetailTab::Variables;
+                                        cx.notify();
+                                    });
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .p_3()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .bg(cx.theme().background)
+                        .child(
+                            div()
+                                .w_full()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(div().w(px(360.)).child(search))
+                                .children(add_variable),
+                        )
+                        .child(div().flex_1().min_h_0().overflow_y_scrollbar().child(rows)),
+                ),
+        )
+    }
+
+    fn render_environment_index(&self, cx: &mut Context<Self>) -> Div {
+        let app = cx.entity();
+        let query = self
+            .environment_search
+            .read(cx)
+            .value()
+            .trim()
+            .to_ascii_lowercase();
+        let environments = self
+            .environments
+            .environments
+            .iter()
+            .filter(|environment| {
+                query.is_empty() || environment.name.to_ascii_lowercase().contains(&query)
+            })
+            .collect::<Vec<_>>();
         let mut content = div()
             .flex_1()
             .min_h_0()
@@ -3927,277 +4786,352 @@ impl AlulaApp {
             .p_3()
             .flex()
             .flex_col()
-            .gap_3()
+            .gap_2()
             .bg(cx.theme().background);
-        if self.environments.environments.is_empty() {
+        if environments.is_empty() {
             content = content.child(empty_state(
-                "No environments yet",
-                "Create one, then right-click a request tab to add it",
+                if self.environments.environments.is_empty() {
+                    "No environments yet"
+                } else {
+                    "No matching environments"
+                },
+                if self.environments.environments.is_empty() {
+                    "Create one, then right-click a request tab to add it"
+                } else {
+                    "Try a different search"
+                },
                 cx,
             ));
         } else {
-            for environment in &self.environments.environments {
-                let mut variables = div().flex().flex_col().gap_1();
-                if environment.variables.is_empty() {
-                    variables = variables.child(
-                        Label::new("No variables yet")
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground),
-                    );
-                } else {
-                    for variable in &environment.variables {
-                        let edit_app = app.clone();
-                        let edit_environment_id = environment.id.clone();
-                        let edit_variable_id = variable.id.clone();
-                        let remove_app = app.clone();
-                        let remove_environment_id = environment.id.clone();
-                        let remove_variable_id = variable.id.clone();
-                        let display_value = if variable.secret {
-                            "••••••••".to_owned()
-                        } else {
-                            variable.value.clone().unwrap_or_default()
-                        };
-                        variables = variables.child(
-                            div()
-                                .w_full()
-                                .h(px(38.))
-                                .px_3()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .rounded(cx.theme().radius)
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .bg(cx.theme().background)
-                                .child(
-                                    div()
-                                        .w(px(150.))
-                                        .flex_shrink_0()
-                                        .font_family(cx.theme().mono_font_family.clone())
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(cx.theme().primary)
-                                        .child(format!("{{{{{}}}}}", variable.name)),
-                                )
-                                .child(
-                                    Tag::secondary()
-                                        .small()
-                                        .rounded_full()
-                                        .child(if variable.secret { "Secret" } else { "Public" }),
-                                )
-                                .child(
-                                    Label::new(display_value)
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground),
-                                )
-                                .child(
-                                    Button::new(SharedString::from(format!(
-                                        "edit-environment-variable-{}",
-                                        variable.id
-                                    )))
-                                    .ghost()
-                                    .small()
-                                    .label("Edit")
-                                    .on_click(
-                                        move |_, window, cx| {
-                                            edit_app.update(cx, |this, cx| {
-                                                this.open_environment_variable_dialog(
-                                                    edit_environment_id.clone(),
-                                                    Some(edit_variable_id.clone()),
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ),
-                                )
-                                .child(
-                                    Button::new(SharedString::from(format!(
-                                        "remove-environment-variable-{}",
-                                        variable.id
-                                    )))
-                                    .ghost()
-                                    .small()
-                                    .compact()
-                                    .icon(IconName::Close)
-                                    .tooltip("Remove variable")
-                                    .on_click(
-                                        move |_, window, cx| {
-                                            remove_app.update(cx, |this, cx| {
-                                                this.remove_environment_variable(
-                                                    &remove_environment_id,
-                                                    &remove_variable_id,
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ),
-                                ),
-                        );
-                    }
-                }
-                let mut requests = div().flex().flex_col().gap_1();
-                if environment.requests.is_empty() {
-                    requests = requests.child(
-                        Label::new("Right-click a request tab to add it here")
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground),
-                    );
-                } else {
-                    for request in &environment.requests {
-                        let open_app = app.clone();
-                        let open_environment_id = environment.id.clone();
-                        let open_request_id = request.id.clone();
-                        requests = requests.child(
-                            div()
-                                .w_full()
-                                .h(px(42.))
-                                .px_3()
-                                .flex()
-                                .items_center()
-                                .gap_3()
-                                .rounded(cx.theme().radius)
-                                .border_1()
-                                .border_color(cx.theme().border)
-                                .bg(cx.theme().sidebar)
-                                .hover(|this| this.bg(cx.theme().muted))
-                                .child(
-                                    div()
-                                        .w(px(54.))
-                                        .flex_shrink_0()
-                                        .text_xs()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(method_color(request.method, cx))
-                                        .child(request.method.as_str()),
-                                )
-                                .child(
-                                    Label::new(request.display_name())
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate(),
-                                )
-                                .child(
-                                    Button::new(SharedString::from(format!(
-                                        "open-environment-request-{}",
-                                        request.id
-                                    )))
-                                    .outline()
-                                    .small()
-                                    .label("Open")
-                                    .on_click(
-                                        move |_, window, cx| {
-                                            open_app.update(cx, |this, cx| {
-                                                this.open_environment_request(
-                                                    &open_environment_id,
-                                                    &open_request_id,
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ),
-                                ),
-                        );
-                    }
-                }
+            for environment in environments {
+                let open_app = app.clone();
+                let open_id = environment.id.clone();
+                let view_app = app.clone();
+                let view_id = environment.id.clone();
+                let delete_app = app.clone();
+                let delete_id = environment.id.clone();
+                let delete_name = environment.name.clone();
                 content = content.child(
                     div()
+                        .id(SharedString::from(format!(
+                            "environment-card-{}",
+                            environment.id
+                        )))
                         .w_full()
-                        .overflow_hidden()
+                        .h(px(68.))
+                        .px_4()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .cursor_pointer()
                         .rounded(cx.theme().radius_lg)
                         .border_1()
                         .border_color(cx.theme().border)
                         .bg(cx.theme().sidebar)
+                        .hover(|this| {
+                            this.border_color(cx.theme().primary.opacity(0.36))
+                                .bg(cx.theme().muted)
+                        })
+                        .child(div().size(px(8.)).rounded_full().bg(cx.theme().primary))
                         .child(
                             div()
-                                .h(px(44.))
-                                .px_3()
+                                .flex_1()
+                                .min_w_0()
                                 .flex()
-                                .items_center()
-                                .gap_2()
-                                .border_b_1()
-                                .border_color(cx.theme().border)
-                                .bg(cx.theme().muted)
-                                .child(div().size(px(7.)).rounded_full().bg(cx.theme().primary))
+                                .flex_col()
+                                .gap_1()
                                 .child(
                                     Label::new(environment.name.clone())
+                                        .truncate()
                                         .font_weight(FontWeight::SEMIBOLD),
                                 )
                                 .child(
-                                    Tag::secondary()
-                                        .small()
-                                        .rounded_full()
-                                        .child(environment.requests.len().to_string()),
+                                    Label::new(format!(
+                                        "{} variables · {} requests",
+                                        environment.variables.len(),
+                                        environment.requests.len()
+                                    ))
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground),
+                                ),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "delete-environment-{}",
+                                environment.id
+                            )))
+                            .ghost()
+                            .small()
+                            .icon(IconName::Delete)
+                            .label("Delete")
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                delete_app.update(cx, |this, cx| {
+                                    this.confirm_delete_environment(
+                                        delete_id.clone(),
+                                        delete_name.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "view-environment-{}",
+                                environment.id
+                            )))
+                            .outline()
+                            .small()
+                            .icon(IconName::ChevronRight)
+                            .label("View")
+                            .on_click(move |_, window, cx| {
+                                cx.stop_propagation();
+                                view_app.update(cx, |this, cx| {
+                                    this.open_environment_details(view_id.clone(), window, cx)
+                                });
+                            }),
+                        )
+                        .on_click(move |_, window, cx| {
+                            open_app.update(cx, |this, cx| {
+                                this.open_environment_details(open_id.clone(), window, cx)
+                            });
+                        }),
+                );
+            }
+        }
+
+        div().size_full().min_h_0().p_4().child(
+            div()
+                .size_full()
+                .min_h_0()
+                .overflow_hidden()
+                .rounded(cx.theme().radius_lg)
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().sidebar)
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .h(px(68.))
+                        .px_4()
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(
+                                    Label::new("Environments")
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_lg(),
                                 )
                                 .child(
-                                    Label::new("Saved request snapshots")
-                                        .ml_auto()
+                                    Label::new("Reusable request groups and variables")
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground),
                                 ),
                         )
                         .child(
-                            div()
-                                .p_3()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .child(
-                                            Label::new("Variables")
-                                                .text_sm()
-                                                .font_weight(FontWeight::SEMIBOLD),
-                                        )
-                                        .child(
-                                            Button::new(SharedString::from(format!(
-                                                "add-environment-variable-{}",
-                                                environment.id
-                                            )))
-                                            .ml_auto()
-                                            .ghost()
-                                            .small()
-                                            .icon(IconName::Plus)
-                                            .label("Add variable")
-                                            .on_click({
-                                                let add_app = app.clone();
-                                                let add_environment_id = environment.id.clone();
-                                                move |_, window, cx| {
-                                                    add_app.update(cx, |this, cx| {
-                                                        this.open_environment_variable_dialog(
-                                                            add_environment_id.clone(),
-                                                            None,
-                                                            window,
-                                                            cx,
-                                                        )
-                                                    });
-                                                }
-                                            }),
-                                        ),
-                                )
-                                .child(variables)
-                                .child(
-                                    div()
-                                        .pt_1()
-                                        .border_t_1()
-                                        .border_color(cx.theme().border)
-                                        .child(
-                                            Label::new("Saved requests")
-                                                .text_sm()
-                                                .font_weight(FontWeight::SEMIBOLD),
-                                        ),
-                                )
-                                .child(requests),
+                            div().ml_auto().w(px(280.)).child(
+                                Input::new(&self.environment_search)
+                                    .prefix(IconName::Search)
+                                    .w_full(),
+                            ),
+                        )
+                        .child(
+                            Tag::secondary()
+                                .small()
+                                .rounded_full()
+                                .child(format!("{} total", self.environments.environments.len())),
+                        )
+                        .child(
+                            Button::new("new-environment")
+                                .primary()
+                                .small()
+                                .icon(IconName::Plus)
+                                .label("New environment")
+                                .on_click(cx.listener(Self::open_environment_dialog)),
                         ),
-                );
-            }
-        }
+                )
+                .child(content),
+        )
+    }
+
+    fn render_environments(&self, cx: &mut Context<Self>) -> Div {
+        self.selected_environment_id
+            .as_deref()
+            .and_then(|environment_id| {
+                self.environments
+                    .environments
+                    .iter()
+                    .find(|environment| environment.id == environment_id)
+            })
+            .map(|environment| self.render_environment_detail(environment, cx))
+            .unwrap_or_else(|| self.render_environment_index(cx))
+    }
+
+    fn history_entry_row(&self, index: usize, app: Entity<Self>, cx: &mut App) -> Option<Div> {
+        let entry = self.history.entries.get(index)?;
+        let open_history_id = entry.id.clone();
+        let delete_history_app = app.clone();
+        let delete_history_id = entry.id.clone();
+        let delete_history_name = entry.request.display_name();
+        let (outcome, outcome_color) = if let Some(status) = entry.status {
+            let color = if status < 300 {
+                cx.theme().success
+            } else if status < 400 {
+                cx.theme().info
+            } else if status < 500 {
+                cx.theme().warning
+            } else {
+                cx.theme().danger
+            };
+            (
+                format!(
+                    "{} · {} ms · {}",
+                    status,
+                    entry.elapsed_ms.unwrap_or_default(),
+                    format_size(entry.size_bytes.unwrap_or_default())
+                ),
+                color,
+            )
+        } else {
+            (
+                entry
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "Request failed".into()),
+                cx.theme().danger,
+            )
+        };
+        Some(
+            div().h(px(72.)).pb_2().child(
+                div()
+                    .w_full()
+                    .h_full()
+                    .px_4()
+                    .py_2()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .rounded(cx.theme().radius_lg)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().sidebar)
+                    .hover(|this| {
+                        this.border_color(cx.theme().muted_foreground.opacity(0.32))
+                            .bg(cx.theme().muted)
+                    })
+                    .child(method_badge(entry.request.method, cx))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                Label::new(entry.request.display_name())
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .px_2()
+                                            .py_0p5()
+                                            .rounded_full()
+                                            .bg(outcome_color.opacity(0.1))
+                                            .text_size(px(10.))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(outcome_color)
+                                            .child(outcome),
+                                    )
+                                    .child(
+                                        Label::new(relative_history_time(entry.sent_at_unix_ms))
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "open-history-request-{}",
+                            entry.id
+                        )))
+                        .outline()
+                        .small()
+                        .label("Open as tab")
+                        .on_click(move |_, window, cx| {
+                            app.update(cx, |this, cx| {
+                                this.open_history_request(&open_history_id, window, cx)
+                            });
+                        }),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!(
+                            "delete-history-entry-{}",
+                            entry.id
+                        )))
+                        .danger()
+                        .small()
+                        .icon(IconName::Delete)
+                        .label("Delete")
+                        .on_click(move |_, window, cx| {
+                            delete_history_app.update(cx, |this, cx| {
+                                this.confirm_delete_history_entry(
+                                    delete_history_id.clone(),
+                                    delete_history_name.clone(),
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                    ),
+            ),
+        )
+    }
+
+    fn render_history(&self, cx: &mut Context<Self>) -> Div {
+        let content = if self.history.entries.is_empty() {
+            div().flex_1().min_h_0().child(empty_state(
+                "No request history yet",
+                "Each completed or failed send is recorded independently of tabs",
+                cx,
+            ))
+        } else {
+            let app = cx.entity();
+            div()
+                .flex_1()
+                .min_h_0()
+                .p_3()
+                .bg(cx.theme().background)
+                .child(
+                    uniform_list(
+                        "history-entries",
+                        self.history.entries.len(),
+                        cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                            range
+                                .filter_map(|index| this.history_entry_row(index, app.clone(), cx))
+                                .collect::<Vec<_>>()
+                        }),
+                    )
+                    .size_full(),
+                )
+        };
         div()
             .size_full()
             .min_h_0()
@@ -4229,163 +5163,25 @@ impl AlulaApp {
                                     .flex_col()
                                     .gap_1()
                                     .child(
-                                        Label::new("Environments")
+                                        Label::new("History")
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_lg(),
                                     )
                                     .child(
-                                        Label::new(
-                                            "Reusable request groups for local, staging, and production workflows",
-                                        )
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground),
+                                        Label::new("Persistent request executions; response bodies are not retained")
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground),
                                     ),
                             )
                             .child(
-                                Button::new("new-environment")
-                                    .primary()
+                                Tag::secondary()
                                     .small()
-                                    .icon(IconName::Plus)
-                                    .label("New environment")
-                                    .on_click(cx.listener(Self::open_environment_dialog)),
+                                    .rounded_full()
+                                    .child(format!("{} entries", self.history.entries.len())),
                             ),
                     )
                     .child(content),
             )
-    }
-
-    fn history_entry_row(&self, index: usize, app: Entity<Self>, cx: &mut App) -> Option<Div> {
-        let entry = self.history.entries.get(index)?;
-        let open_history_id = entry.id.clone();
-        let outcome = if let Some(status) = entry.status {
-            format!(
-                "{} · {} ms · {}",
-                status,
-                entry.elapsed_ms.unwrap_or_default(),
-                format_size(entry.size_bytes.unwrap_or_default())
-            )
-        } else {
-            entry
-                .error
-                .clone()
-                .unwrap_or_else(|| "Request failed".into())
-        };
-        Some(
-            div().h(px(66.)).pb_2().child(
-                div()
-                    .w_full()
-                    .h_full()
-                    .px_3()
-                    .py_2()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .rounded(cx.theme().radius)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().sidebar)
-                    .hover(|this| this.bg(cx.theme().muted))
-                    .child(
-                        div()
-                            .w(px(54.))
-                            .flex_shrink_0()
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(method_color(entry.request.method, cx))
-                            .child(entry.request.method.as_str()),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                Label::new(entry.request.display_name())
-                                    .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD),
-                            )
-                            .child(
-                                Label::new(format!(
-                                    "{} · {}",
-                                    outcome,
-                                    relative_history_time(entry.sent_at_unix_ms)
-                                ))
-                                .truncate()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground),
-                            ),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "open-history-request-{}",
-                            entry.id
-                        )))
-                        .outline()
-                        .small()
-                        .label("Open as tab")
-                        .on_click(move |_, window, cx| {
-                            app.update(cx, |this, cx| {
-                                this.open_history_request(&open_history_id, window, cx)
-                            });
-                        }),
-                    ),
-            ),
-        )
-    }
-
-    fn render_history(&self, cx: &mut Context<Self>) -> Div {
-        let content = if self.history.entries.is_empty() {
-            div().flex_1().min_h_0().child(empty_state(
-                "No request history yet",
-                "Each completed or failed send is recorded independently of tabs",
-                cx,
-            ))
-        } else {
-            let app = cx.entity();
-            div().flex_1().min_h_0().p_4().child(
-                uniform_list(
-                    "history-entries",
-                    self.history.entries.len(),
-                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                        range
-                            .filter_map(|index| this.history_entry_row(index, app.clone(), cx))
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .size_full(),
-            )
-        };
-        div()
-            .size_full()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .h(px(52.))
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                Label::new("History")
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_lg(),
-                            )
-                            .child(
-                                Label::new("Persistent request executions; response bodies are not retained")
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground),
-                            ),
-                    ),
-            )
-            .child(content)
     }
 
     fn render_request_builder(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -5745,6 +6541,24 @@ fn empty_state(title: &'static str, subtitle: &'static str, cx: &App) -> Div {
         .gap_2()
         .child(
             div()
+                .mb_1()
+                .size(px(38.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(cx.theme().radius_lg)
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted)
+                .child(
+                    div()
+                        .size(px(8.))
+                        .rounded_full()
+                        .bg(cx.theme().primary.opacity(0.72)),
+                ),
+        )
+        .child(
+            div()
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
                 .child(title),
@@ -5754,6 +6568,28 @@ fn empty_state(title: &'static str, subtitle: &'static str, cx: &App) -> Div {
                 .text_xs()
                 .text_color(cx.theme().muted_foreground),
         )
+}
+
+fn method_badge(method: HttpMethod, cx: &App) -> Div {
+    let color = method_color(method, cx);
+    div()
+        .w(px(58.))
+        .h(px(24.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(color.opacity(0.1))
+        .font_family(cx.theme().mono_font_family.clone())
+        .text_size(px(9.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(color)
+        .child(if method == HttpMethod::Delete {
+            "DEL"
+        } else {
+            method.as_str()
+        })
 }
 
 fn method_color(method: HttpMethod, cx: &App) -> Hsla {
@@ -5894,11 +6730,14 @@ fn relative_history_time(sent_at_unix_ms: u64) -> String {
         0..=59 => "just now".into(),
         60..=3_599 => format!("{} min ago", elapsed_seconds / 60),
         3_600..=86_399 => format!("{} h ago", elapsed_seconds / 3_600),
-        _ => format!("{} d ago", elapsed_seconds / 86_400),
+        86_400..=2_591_999 => format!("{} d ago", elapsed_seconds / 86_400),
+        2_592_000..=31_535_999 => format!("{} mo ago", elapsed_seconds / 2_592_000),
+        _ => format!("{} y ago", elapsed_seconds / 31_536_000),
     }
 }
 
 fn main() -> Result<()> {
+    install_tls_crypto_provider();
     let app = Application::new().with_assets(Assets);
     app.run(|cx| {
         gpui_component::init(cx);

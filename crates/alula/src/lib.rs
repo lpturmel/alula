@@ -8,6 +8,7 @@ pub mod model;
 pub mod persistence;
 pub mod settings;
 pub mod shortcuts;
+pub mod tls;
 pub mod variables;
 pub mod websocket;
 
@@ -37,6 +38,7 @@ pub use persistence::{
 };
 pub use settings::{SettingsView, apply_theme};
 pub use shortcuts::*;
+pub use tls::install_tls_crypto_provider;
 pub use variables::{
     TemplateInspection, VariableError, VariableErrorKind, delete_secret, inspect_template,
     load_secret, resolve_request, resolve_template, store_secret, valid_variable_name,

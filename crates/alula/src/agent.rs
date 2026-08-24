@@ -93,6 +93,9 @@ pub enum EnvironmentAgentCommand {
     CreateEnvironment {
         name: String,
     },
+    DeleteEnvironment {
+        environment_id: String,
+    },
     SetVariable {
         environment_id: String,
         name: String,
@@ -113,6 +116,7 @@ pub enum EnvironmentAgentCommand {
 pub enum HistoryAgentCommand {
     ListHistory { limit: Option<usize> },
     GetHistoryEntry { history_id: String },
+    DeleteHistoryEntry { history_id: String },
 }
 
 /// Applies an agent-authored theme through the same parser and validation path
@@ -279,6 +283,30 @@ pub fn apply_environment_agent_command(
             let id = environments.create(name);
             AgentReply::success("environment created", json!({ "environment_id": id }))
         }
+        EnvironmentAgentCommand::DeleteEnvironment { environment_id } => {
+            let Some(environment) = environments
+                .environments
+                .iter()
+                .find(|environment| environment.id == environment_id)
+            else {
+                return AgentReply::error("environment not found");
+            };
+            for variable in environment
+                .variables
+                .iter()
+                .filter(|variable| variable.secret)
+            {
+                if let Err(error) = delete_secret(&environment_id, &variable.id) {
+                    return AgentReply::error(format!(
+                        "could not remove environment secret: {error:#}"
+                    ));
+                }
+            }
+            let environment = environments
+                .remove(&environment_id)
+                .expect("environment existence checked");
+            AgentReply::success("environment deleted", environment)
+        }
         EnvironmentAgentCommand::SetVariable {
             environment_id,
             name,
@@ -385,7 +413,7 @@ pub fn apply_environment_agent_command(
 }
 
 pub fn apply_history_agent_command(
-    history: &HistoryStore,
+    history: &mut HistoryStore,
     command: HistoryAgentCommand,
 ) -> AgentReply {
     match command {
@@ -402,6 +430,13 @@ pub fn apply_history_agent_command(
             .find(|entry| entry.id == history_id)
             .map(|entry| AgentReply::success("history entry found", entry))
             .unwrap_or_else(|| AgentReply::error("history entry not found")),
+        HistoryAgentCommand::DeleteHistoryEntry { history_id } => {
+            if history.remove(&history_id) {
+                AgentReply::success("history entry deleted", json!({ "history_id": history_id }))
+            } else {
+                AgentReply::error("history entry not found")
+            }
+        }
     }
 }
 
@@ -443,7 +478,7 @@ fn upsert_field(
 
 /// Number of contracts returned by [`mcp_tools`]. Kept separately so UI paint
 /// paths do not allocate and construct every JSON schema merely to show a badge.
-pub const MCP_TOOL_COUNT: usize = 16;
+pub const MCP_TOOL_COUNT: usize = 18;
 
 /// MCP-compatible tool descriptors. A transport adapter can publish these over
 /// stdio or Streamable HTTP without coupling the app core to a model vendor.
@@ -542,6 +577,16 @@ pub fn mcp_tools() -> Vec<Value> {
             "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
         }),
         json!({
+            "name": "delete_environment",
+            "description": "Permanently delete an environment, its saved request snapshots, variables, and stored secrets.",
+            "inputSchema": {
+                "type": "object", "required": ["environment_id"],
+                "properties": { "environment_id": { "type": "string" } },
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }
+        }),
+        json!({
             "name": "set_environment_variable",
             "description": "Create or update a variable in an environment. Secret values are stored in the OS credential store and are never written to environment files.",
             "inputSchema": {
@@ -598,6 +643,16 @@ pub fn mcp_tools() -> Vec<Value> {
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": true, "openWorldHint": false }
+        }),
+        json!({
+            "name": "delete_history_entry",
+            "description": "Permanently delete one request execution history entry by stable ID.",
+            "inputSchema": {
+                "type": "object", "required": ["history_id"],
+                "properties": { "history_id": { "type": "string" } },
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }
         }),
         json!({
             "name": "get_theme",
@@ -796,5 +851,37 @@ mod tests {
             environments.environments[0].variables[0].value.as_deref(),
             Some("https://api.stag.compile.sh")
         );
+    }
+
+    #[test]
+    fn agent_can_delete_environments_and_history_entries() {
+        let workspace = Workspace::default();
+        let mut environments = EnvironmentStore::default();
+        let environment_id = environments.create("Disposable");
+        environments
+            .assign(&environment_id, workspace.active().unwrap().clone())
+            .unwrap();
+
+        let deleted_environment = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::DeleteEnvironment { environment_id },
+        );
+        assert!(deleted_environment.ok);
+        assert!(environments.environments.is_empty());
+
+        let mut history = HistoryStore::default();
+        let entry = crate::persistence::HistoryEntry::failure(
+            workspace.active().unwrap().clone(),
+            "fixture failure",
+        );
+        let history_id = entry.id.clone();
+        history.push(entry);
+        let deleted_history = apply_history_agent_command(
+            &mut history,
+            HistoryAgentCommand::DeleteHistoryEntry { history_id },
+        );
+        assert!(deleted_history.ok);
+        assert!(history.entries.is_empty());
     }
 }

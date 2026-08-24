@@ -3,7 +3,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use alula::{AgentReply, LATEST_PROTOCOL_VERSION, McpHttpServer, reply_to_tool};
+use alula::{
+    AgentReply, LATEST_PROTOCOL_VERSION, McpHttpServer, install_tls_crypto_provider, reply_to_tool,
+};
 use reqwest::{
     StatusCode,
     blocking::{Client, Response},
@@ -24,6 +26,7 @@ fn post(client: &Client, endpoint: &str, message: Value) -> Response {
 
 #[test]
 fn embedded_streamable_http_obeys_transport_and_dispatches_tools() {
+    install_tls_crypto_provider();
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()

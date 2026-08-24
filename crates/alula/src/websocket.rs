@@ -16,7 +16,7 @@ use tungstenite::{
     stream::MaybeTlsStream,
 };
 
-use crate::{RequestDraft, ResponseSnapshot};
+use crate::{RequestDraft, ResponseSnapshot, install_tls_crypto_provider};
 
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_MESSAGE_PREVIEW_BYTES: usize = 512 * 1024;
@@ -257,6 +257,7 @@ impl WebSocketExecutor {
         cookie_jar: Option<Arc<Jar>>,
         mut on_event: impl FnMut(WebSocketStreamEvent),
     ) -> Result<ResponseSnapshot> {
+        install_tls_crypto_provider();
         let url = websocket_url(request)?;
         let cookie_url = cookie_url(url.clone())?;
         let uri: Uri = url
@@ -498,6 +499,30 @@ mod tests {
             events.last(),
             Some(WebSocketStreamEvent::Closed { stopped: true, .. })
         ));
+    }
+
+    #[test]
+    fn secure_websocket_path_has_an_explicit_crypto_provider() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let _connection = listener.accept().unwrap();
+            // Closing a plain socket forces the TLS handshake to return an
+            // ordinary error after Rustls has constructed its client config.
+        });
+
+        let result = WebSocketExecutor::execute_streaming(
+            &RequestDraft {
+                url: format!("wss://{address}/stream"),
+                ..RequestDraft::default()
+            },
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        );
+        server.join().unwrap();
+
+        assert!(result.is_err());
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
     }
 
     #[test]

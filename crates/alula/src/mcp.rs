@@ -160,6 +160,25 @@ impl McpServer {
                 }
                 return reply_to_tool(reply);
             }
+            "delete_environment" => {
+                let environment_id = match required_string(&arguments, "environment_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                self.reload_environments();
+                let reply = apply_environment_agent_command(
+                    &self.workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::DeleteEnvironment { environment_id },
+                );
+                if reply.ok
+                    && let Err(error) =
+                        save_toml(&self.state_paths.environments, &self.environments)
+                {
+                    return tool_error(format!("failed to save environments: {error:#}"));
+                }
+                return reply_to_tool(reply);
+            }
             "set_environment_variable" => {
                 let environment_id = match required_string(&arguments, "environment_id") {
                     Ok(id) => id,
@@ -252,7 +271,7 @@ impl McpServer {
                     .and_then(Value::as_u64)
                     .map(|limit| limit as usize);
                 return reply_to_tool(apply_history_agent_command(
-                    &self.history,
+                    &mut self.history,
                     HistoryAgentCommand::ListHistory { limit },
                 ));
             }
@@ -263,9 +282,26 @@ impl McpServer {
                 };
                 self.reload_history();
                 return reply_to_tool(apply_history_agent_command(
-                    &self.history,
+                    &mut self.history,
                     HistoryAgentCommand::GetHistoryEntry { history_id },
                 ));
+            }
+            "delete_history_entry" => {
+                let history_id = match required_string(&arguments, "history_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                self.reload_history();
+                let reply = apply_history_agent_command(
+                    &mut self.history,
+                    HistoryAgentCommand::DeleteHistoryEntry { history_id },
+                );
+                if reply.ok
+                    && let Err(error) = save_toml(&self.state_paths.history, &self.history)
+                {
+                    return tool_error(format!("failed to save history: {error:#}"));
+                }
+                return reply_to_tool(reply);
             }
             _ => {}
         }

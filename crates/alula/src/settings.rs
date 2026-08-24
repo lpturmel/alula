@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use gpui::prelude::*;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme as _, Colorize as _, Disableable as _, Sizable as _, Theme,
+    ActiveTheme as _, Colorize as _, Disableable as _, Icon, IconName, Sizable as _, Theme,
     button::{Button, ButtonVariants as _},
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
     input::{Input, InputEvent, InputState},
@@ -11,7 +11,6 @@ use gpui_component::{
     label::Label,
     scroll::ScrollableElement as _,
     switch::Switch,
-    tab::{Tab, TabBar},
     text::TextView,
 };
 
@@ -38,6 +37,24 @@ impl SettingsPage {
             Self::Theme => "Theme",
         }
     }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::General => "Files and application behavior",
+            Self::Agent => "Local MCP service",
+            Self::Keybindings => "Commands and shortcuts",
+            Self::Theme => "Interface and syntax colors",
+        }
+    }
+
+    fn icon(self) -> IconName {
+        match self {
+            Self::General => IconName::Settings2,
+            Self::Agent => IconName::Bot,
+            Self::Keybindings => IconName::SquareTerminal,
+            Self::Theme => IconName::Palette,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +71,7 @@ impl ThemeSection {
         match self {
             Self::Interface => "Interface",
             Self::Syntax => "Syntax",
-            Self::Import => "Import & agent",
+            Self::Import => "Import & Agent",
         }
     }
 }
@@ -679,13 +696,16 @@ impl SettingsView {
             ))
             .child(
                 div()
+                    .w(px(507.))
+                    .h(px(58.))
+                    .flex_shrink_0()
                     .flex()
                     .items_end()
                     .gap_2()
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
+                            .w(px(404.))
+                            .flex_shrink_0()
                             .child(field("Configuration file", Input::new(&self.config_file))),
                     )
                     .child(
@@ -700,6 +720,7 @@ impl SettingsView {
                     "Current file: {}. Leave this unchanged to keep the platform default.",
                     self.path.display()
                 ))
+                .flex_shrink_0()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground),
             )
@@ -747,12 +768,15 @@ impl SettingsView {
                     .items_start()
                     .justify_between()
                     .gap_4()
-                    .child(section_heading(
-                        "Keyboard shortcuts",
-                        "Shortcuts update when settings are saved. Create new adapts to the active workspace.",
-                    ))
+                    .child(
+                        div().flex_1().min_w_0().child(section_heading(
+                            "Keyboard shortcuts",
+                            "Shortcuts update when settings are saved. Create new adapts to the active workspace.",
+                        )),
+                    )
                     .child(
                         Button::new("reset-keybindings")
+                            .flex_shrink_0()
                             .outline()
                             .small()
                             .label("Restore defaults")
@@ -962,7 +986,8 @@ impl SettingsView {
         let current = self.theme_section;
         let mut tabs = div()
             .id("theme-settings-tabs")
-            .w_full()
+            .flex_1()
+            .min_w_0()
             .flex_shrink_0()
             .h(px(28.))
             .p(px(2.))
@@ -989,13 +1014,20 @@ impl SettingsView {
                     .rounded(cx.theme().radius)
                     .text_sm()
                     .text_color(if selected {
-                        cx.theme().tab_active_foreground
+                        cx.theme().foreground
                     } else {
                         cx.theme().tab_foreground
                     })
-                    .when(selected, |this| this.bg(cx.theme().background).shadow_xs())
+                    .when(selected, |this| {
+                        this.border_1()
+                            .border_color(cx.theme().primary.opacity(0.34))
+                            .bg(cx.theme().accent)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .shadow_xs()
+                    })
                     .when(!selected, |this| {
-                        this.hover(|this| this.bg(cx.theme().background.opacity(0.5)))
+                        this.font_weight(FontWeight::MEDIUM)
+                            .hover(|this| this.bg(cx.theme().accent.opacity(0.5)))
                     })
                     .on_click(move |_, _, cx| {
                         app.update(cx, |this, cx| {
@@ -1021,25 +1053,95 @@ impl SettingsView {
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current = self.page;
-        let app = cx.entity();
-        let mut tabs = TabBar::new("settings-pages")
-            .segmented()
-            .w_full()
-            .h(px(34.))
-            .border_1()
+        // The full-app settings shell reserves space for its title, footer,
+        // padding, and gaps. An explicit viewport-derived height is required
+        // because the dialog's scroll wrapper does not propagate percentage
+        // heights to its child.
+        let settings_height = (window.viewport_size().height - px(126.)).max(px(320.));
+        let mut navigation = div()
+            .w(px(188.))
+            .h_full()
+            .flex_shrink_0()
+            .p_2()
+            .border_r_1()
             .border_color(cx.theme().border)
-            .rounded(cx.theme().radius)
-            .selected_index(current as usize)
-            .on_click(move |index, _, cx| {
-                if let Some(page) = SettingsPage::ALL.get(*index).copied() {
-                    app.update(cx, |this, cx| {
-                        this.page = page;
-                        cx.notify();
-                    });
-                }
-            });
-        for page in SettingsPage::ALL {
-            tabs = tabs.child(Tab::new().flex_1().label(page.label()));
+            .bg(cx.theme().muted.opacity(0.42))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                Label::new("PREFERENCES")
+                    .px_2()
+                    .pt_1()
+                    .pb_2()
+                    .text_size(px(9.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().muted_foreground.opacity(0.72)),
+            );
+        for (index, page) in SettingsPage::ALL.into_iter().enumerate() {
+            let selected = current == page;
+            let app = cx.entity();
+            navigation = navigation.child(
+                Button::new(("settings-page", index))
+                    .ghost()
+                    .w_full()
+                    .h(px(48.))
+                    .px_2()
+                    .rounded(cx.theme().radius)
+                    .when(selected, |this| this.bg(cx.theme().accent))
+                    .child(
+                        div()
+                            .w(px(156.))
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .w(px(18.))
+                                    .flex_shrink_0()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(Icon::new(page.icon()).size_4().text_color(
+                                        if selected {
+                                            cx.theme().primary
+                                        } else {
+                                            cx.theme().muted_foreground.opacity(0.75)
+                                        },
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        Label::new(page.label())
+                                            .text_sm()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(if selected {
+                                                cx.theme().foreground
+                                            } else {
+                                                cx.theme().muted_foreground
+                                            }),
+                                    )
+                                    .child(
+                                        Label::new(page.description())
+                                            .truncate()
+                                            .text_size(px(10.))
+                                            .text_color(cx.theme().muted_foreground),
+                                    ),
+                            ),
+                    )
+                    .on_click(move |_, _, cx| {
+                        app.update(cx, |this, cx| {
+                            this.page = page;
+                            cx.notify();
+                        });
+                    }),
+            );
         }
         let content = match current {
             SettingsPage::General => self.render_general(cx),
@@ -1049,33 +1151,88 @@ impl Render for SettingsView {
         };
         div()
             .w_full()
-            .h(px(570.))
+            .h(settings_height)
+            .min_h_0()
             .flex()
-            .flex_col()
-            .gap_4()
+            .overflow_hidden()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
             .track_focus(&self.shortcut_focus)
             .on_key_down(cx.listener(Self::capture_shortcut))
-            .child(tabs)
-            .when(current == SettingsPage::Theme, |this| {
-                this.child(self.render_theme_tabs(cx))
-            })
+            .child(navigation)
             .child(
                 div()
-                    .w_full()
-                    .min_w_0()
                     .flex_1()
+                    .min_w_0()
                     .min_h_0()
-                    .overflow_y_scrollbar()
-                    .pr_2()
-                    .child(div().w_full().min_w_0().child(content)),
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .h(px(58.))
+                            .px_4()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        Label::new(current.label())
+                                            .font_weight(FontWeight::SEMIBOLD),
+                                    )
+                                    .child(
+                                        Label::new(current.description())
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground),
+                                    ),
+                            ),
+                    )
+                    .when(current == SettingsPage::Theme, |this| {
+                        this.child(
+                            div()
+                                .w_full()
+                                .px_4()
+                                .pt_3()
+                                .flex_shrink_0()
+                                .flex()
+                                .child(self.render_theme_tabs(cx)),
+                        )
+                    })
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scrollbar()
+                            .p_4()
+                            .child(div().w_full().min_w_0().flex_shrink_0().child(content)),
+                    )
+                    .when_some(self.status.clone(), |this, (success, message)| {
+                        this.child(
+                            div()
+                                .h(px(34.))
+                                .px_4()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_center()
+                                .border_t_1()
+                                .border_color(cx.theme().border)
+                                .child(Label::new(message).text_xs().text_color(if success {
+                                    cx.theme().success
+                                } else {
+                                    cx.theme().danger
+                                })),
+                        )
+                    }),
             )
-            .when_some(self.status.clone(), |this, (success, message)| {
-                this.child(Label::new(message).text_xs().text_color(if success {
-                    cx.theme().success
-                } else {
-                    cx.theme().danger
-                }))
-            })
     }
 }
 
@@ -1084,7 +1241,7 @@ fn field(label: &'static str, input: Input) -> Div {
         .flex()
         .flex_col()
         .gap_2()
-        .child(Label::new(label).text_xs())
+        .child(Label::new(label).text_xs().font_weight(FontWeight::MEDIUM))
         .child(input)
 }
 

@@ -10,7 +10,10 @@ use reqwest::blocking::Client;
 use reqwest::cookie::Jar;
 use reqwest::header::{HeaderName, HeaderValue};
 
-use crate::model::{HttpMethod, RequestDraft, ResponseSnapshot};
+use crate::{
+    install_tls_crypto_provider,
+    model::{HttpMethod, RequestDraft, ResponseSnapshot},
+};
 
 pub struct HttpExecutor;
 
@@ -104,6 +107,7 @@ impl HttpExecutor {
 
 impl HttpSession {
     pub fn new() -> Self {
+        install_tls_crypto_provider();
         Self {
             client: Arc::new(Mutex::new(None)),
             cookie_jar: Arc::new(Jar::default()),

@@ -4,7 +4,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use alula::{AppConfig, HistoryEntry, HistoryStore, StatePaths, Workspace, save_toml};
+use alula::{
+    AppConfig, EnvironmentStore, HistoryEntry, HistoryStore, StatePaths, Workspace,
+    load_or_default, save_toml,
+};
 use serde_json::{Value, json};
 
 fn call(
@@ -36,6 +39,7 @@ fn agent_creates_previews_saves_and_reads_theme_over_mcp_stdio() {
         workspace.active().unwrap().clone(),
         "fixture failure",
     ));
+    let history_id = history.entries[0].id.clone();
     save_toml(&state_paths.history, &history).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_alula-mcp"))
         .env("ALULA_CONFIG", &path)
@@ -71,8 +75,10 @@ fn agent_creates_previews_saves_and_reads_theme_over_mcp_stdio() {
     assert!(names.contains(&"preview_theme"));
     assert!(names.contains(&"save_theme"));
     assert!(names.contains(&"create_environment"));
+    assert!(names.contains(&"delete_environment"));
     assert!(names.contains(&"assign_request_to_environment"));
     assert!(names.contains(&"list_history"));
+    assert!(names.contains(&"delete_history_entry"));
 
     let schema = call(
         &mut stdin,
@@ -191,6 +197,30 @@ fn agent_creates_previews_saves_and_reads_theme_over_mcp_stdio() {
         history_over_mcp["result"]["structuredContent"][0]["error"],
         "fixture failure"
     );
+
+    let deleted_history = call(
+        &mut stdin,
+        &mut stdout,
+        json!({
+            "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+            "params": { "name": "delete_history_entry", "arguments": { "history_id": history_id } }
+        }),
+    );
+    assert_eq!(deleted_history["result"]["isError"], false);
+
+    let deleted_environment = call(
+        &mut stdin,
+        &mut stdout,
+        json!({
+            "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+            "params": { "name": "delete_environment", "arguments": { "environment_id": environment_id } }
+        }),
+    );
+    assert_eq!(deleted_environment["result"]["isError"], false);
+    let saved_history: HistoryStore = load_or_default(&state_paths.history).unwrap();
+    let saved_environments: EnvironmentStore = load_or_default(&state_paths.environments).unwrap();
+    assert!(saved_history.entries.is_empty());
+    assert!(saved_environments.environments.is_empty());
     assert!(state_paths.workspace.exists());
     assert!(state_paths.history.exists());
     assert!(state_paths.environments.exists());

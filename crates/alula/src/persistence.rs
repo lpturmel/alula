@@ -172,6 +172,14 @@ impl EnvironmentStore {
         removed
     }
 
+    pub fn remove(&mut self, environment_id: &str) -> Option<Environment> {
+        let position = self
+            .environments
+            .iter()
+            .position(|environment| environment.id == environment_id)?;
+        Some(self.environments.remove(position))
+    }
+
     pub fn sync_open_requests(&mut self, requests: &[RequestDraft]) {
         for environment in &mut self.environments {
             for saved in &mut environment.requests {
@@ -245,6 +253,13 @@ impl HistoryStore {
         let entries = Arc::make_mut(&mut self.entries);
         entries.insert(0, entry);
         entries.truncate(MAX_HISTORY_ENTRIES);
+    }
+
+    pub fn remove(&mut self, history_id: &str) -> bool {
+        let entries = Arc::make_mut(&mut self.entries);
+        let previous_len = entries.len();
+        entries.retain(|entry| entry.id != history_id);
+        entries.len() != previous_len
     }
 }
 
