@@ -33,8 +33,8 @@ pub use mcp::{
 pub use mcp_http::McpHttpServer;
 pub use model::{HttpMethod, KeyValueField, RequestDraft, ResponseSnapshot, Workspace};
 pub use persistence::{
-    Environment, EnvironmentStore, EnvironmentVariable, HistoryEntry, HistoryStore, PersistedState,
-    StatePaths, load_or_default, save_toml,
+    Environment, EnvironmentFolder, EnvironmentStore, EnvironmentVariable, HistoryEntry,
+    HistoryStore, PersistedState, StatePaths, load_or_default, save_toml,
 };
 pub use settings::{SettingsView, apply_theme};
 pub use shortcuts::*;

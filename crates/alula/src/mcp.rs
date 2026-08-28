@@ -40,7 +40,9 @@ impl McpServer {
         let workspace = load_or_default::<Workspace>(&state_paths.workspace)
             .unwrap_or_default()
             .normalize();
-        let environments = load_or_default(&state_paths.environments).unwrap_or_default();
+        let environments = load_or_default::<EnvironmentStore>(&state_paths.environments)
+            .unwrap_or_default()
+            .normalize();
         let history = load_or_default(&state_paths.history).unwrap_or_default();
         Self {
             theme,
@@ -179,6 +181,94 @@ impl McpServer {
                 }
                 return reply_to_tool(reply);
             }
+            "create_environment_folder" => {
+                let environment_id = match required_string(&arguments, "environment_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                let name = match required_string(&arguments, "name") {
+                    Ok(name) => name,
+                    Err(error) => return tool_error(error),
+                };
+                let parent_folder_id = match optional_string(&arguments, "parent_folder_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                self.reload_environments();
+                let reply = apply_environment_agent_command(
+                    &self.workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::CreateFolder {
+                        environment_id,
+                        parent_folder_id,
+                        name,
+                    },
+                );
+                if reply.ok
+                    && let Err(error) =
+                        save_toml(&self.state_paths.environments, &self.environments)
+                {
+                    return tool_error(format!("failed to save environments: {error:#}"));
+                }
+                return reply_to_tool(reply);
+            }
+            "rename_environment_folder" => {
+                let environment_id = match required_string(&arguments, "environment_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                let folder_id = match required_string(&arguments, "folder_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                let name = match required_string(&arguments, "name") {
+                    Ok(name) => name,
+                    Err(error) => return tool_error(error),
+                };
+                self.reload_environments();
+                let reply = apply_environment_agent_command(
+                    &self.workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::RenameFolder {
+                        environment_id,
+                        folder_id,
+                        name,
+                    },
+                );
+                if reply.ok
+                    && let Err(error) =
+                        save_toml(&self.state_paths.environments, &self.environments)
+                {
+                    return tool_error(format!("failed to save environments: {error:#}"));
+                }
+                return reply_to_tool(reply);
+            }
+            "delete_environment_folder" => {
+                let environment_id = match required_string(&arguments, "environment_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                let folder_id = match required_string(&arguments, "folder_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
+                self.reload_environments();
+                let reply = apply_environment_agent_command(
+                    &self.workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::DeleteFolder {
+                        environment_id,
+                        folder_id,
+                    },
+                );
+                if reply.ok
+                    && let Err(error) =
+                        save_toml(&self.state_paths.environments, &self.environments)
+                {
+                    return tool_error(format!("failed to save environments: {error:#}"));
+                }
+                return reply_to_tool(reply);
+            }
             "set_environment_variable" => {
                 let environment_id = match required_string(&arguments, "environment_id") {
                     Ok(id) => id,
@@ -227,6 +317,10 @@ impl McpServer {
                     Ok(id) => id,
                     Err(error) => return tool_error(error),
                 };
+                let folder_id = match optional_string(&arguments, "folder_id") {
+                    Ok(id) => id,
+                    Err(error) => return tool_error(error),
+                };
                 self.reload_workspace();
                 self.reload_environments();
                 let reply = apply_environment_agent_command(
@@ -234,6 +328,7 @@ impl McpServer {
                     &mut self.environments,
                     EnvironmentAgentCommand::AssignRequest {
                         environment_id,
+                        folder_id,
                         request_id,
                     },
                 );
@@ -345,7 +440,7 @@ impl McpServer {
 
     fn reload_environments(&mut self) {
         if let Ok(environments) = load_or_default(&self.state_paths.environments) {
-            self.environments = environments;
+            self.environments = EnvironmentStore::normalize(environments);
         }
     }
 
@@ -374,6 +469,14 @@ fn required_string(arguments: &Value, key: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| format!("{key} must be a string"))
+}
+
+fn optional_string(arguments: &Value, key: &str) -> Result<Option<String>, String> {
+    match arguments.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(format!("{key} must be a string")),
+    }
 }
 
 fn tool_error(message: impl Into<String>) -> Value {
@@ -448,10 +551,70 @@ mod tests {
             serde_json::from_str(&server.handle(&create.to_string()).unwrap()).unwrap();
         let environment_id = created["result"]["structuredContent"]["environment_id"]
             .as_str()
-            .unwrap();
-        let set_variable = json!({
+            .unwrap()
+            .to_owned();
+        let create_folder = json!({
             "jsonrpc": "2.0",
             "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "create_environment_folder",
+                "arguments": {
+                    "environment_id": environment_id,
+                    "name": "Authentication"
+                }
+            }
+        });
+        let folder_created: Value =
+            serde_json::from_str(&server.handle(&create_folder.to_string()).unwrap()).unwrap();
+        let folder_id = folder_created["result"]["structuredContent"]["folder_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let create_nested_folder = json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "create_environment_folder",
+                "arguments": {
+                    "environment_id": environment_id,
+                    "parent_folder_id": folder_id,
+                    "name": "Login"
+                }
+            }
+        });
+        let nested_created: Value =
+            serde_json::from_str(&server.handle(&create_nested_folder.to_string()).unwrap())
+                .unwrap();
+        let nested_folder_id = nested_created["result"]["structuredContent"]["folder_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let request_id = server.workspace.active_request_id.clone();
+        save_toml(&StatePaths::beside(&path).workspace, &server.workspace).unwrap();
+        let assign = json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "assign_request_to_environment",
+                "arguments": {
+                    "environment_id": environment_id,
+                    "folder_id": nested_folder_id,
+                    "request_id": request_id
+                }
+            }
+        });
+        let assigned: Value =
+            serde_json::from_str(&server.handle(&assign.to_string()).unwrap()).unwrap();
+        assert_eq!(
+            assigned["result"]["isError"], false,
+            "assignment response: {assigned:#}"
+        );
+        let set_variable = json!({
+            "jsonrpc": "2.0",
+            "id": 5,
             "method": "tools/call",
             "params": {
                 "name": "set_environment_variable",
@@ -469,6 +632,12 @@ mod tests {
         let saved: EnvironmentStore =
             load_or_default(&StatePaths::beside(&path).environments).unwrap();
         assert_eq!(saved.environments[0].variables[0].name, "api_url");
+        assert_eq!(saved.environments[0].folders[0].name, "Authentication");
+        assert_eq!(saved.environments[0].folders[0].folders[0].name, "Login");
+        assert_eq!(
+            saved.environments[0].folders[0].folders[0].requests.len(),
+            1
+        );
         assert_eq!(
             saved.environments[0].variables[0].value.as_deref(),
             Some("https://api.stag.compile.sh")

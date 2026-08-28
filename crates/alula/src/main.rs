@@ -2,14 +2,14 @@
 
 use alula::{
     AddHeader, AddParameter, AgentReply, AppConfig, CloseTab, CopyResponseBody, CreateNew,
-    EnvironmentAgentCommand, EnvironmentStore, EnvironmentVariable, FocusUrl, HistoryAgentCommand,
-    HistoryEntry, HistoryStore, HttpMethod, HttpSession, HttpStreamEvent, KeyValueField,
-    McpHttpServer, McpToolHandler, NextTab, OpenCommandPalette, OpenSettings, PersistedState,
-    PreviousTab, RequestDraft, ResponseBodyCache, ResponseSnapshot, SendRequest, SettingsView,
-    ShowBody, ShowEnvironments, ShowFormattedResponse, ShowHeaders, ShowHistory, ShowParameters,
-    ShowRawResponse, ShowRequests, StatePaths, ThemeAgentCommand, WebSocketDirection,
-    WebSocketExecutor, WebSocketMessageSnapshot, WebSocketStreamEvent, Workspace,
-    apply_environment_agent_command, apply_history_agent_command, apply_theme,
+    EnvironmentAgentCommand, EnvironmentFolder, EnvironmentStore, EnvironmentVariable, FocusUrl,
+    HistoryAgentCommand, HistoryEntry, HistoryStore, HttpMethod, HttpSession, HttpStreamEvent,
+    KeyValueField, McpHttpServer, McpToolHandler, NextTab, OpenCommandPalette, OpenSettings,
+    PersistedState, PreviousTab, RequestDraft, ResponseBodyCache, ResponseSnapshot, SendRequest,
+    SettingsView, ShowBody, ShowEnvironments, ShowFormattedResponse, ShowHeaders, ShowHistory,
+    ShowParameters, ShowRawResponse, ShowRequests, StatePaths, ThemeAgentCommand,
+    WebSocketDirection, WebSocketExecutor, WebSocketMessageSnapshot, WebSocketStreamEvent,
+    Workspace, apply_environment_agent_command, apply_history_agent_command, apply_theme,
     apply_theme_agent_command, chunked_fenced_code_blocks, config_path, configured_key_bindings,
     delete_secret, inspect_template, install_tls_crypto_provider, is_websocket_request,
     load_secret, reply_to_tool, resolve_request, store_secret, syntax_language,
@@ -27,7 +27,7 @@ use gpui_component::{
     highlighter::{LanguageConfig, LanguageRegistry},
     input::{CompletionProvider, Input, InputEvent, InputState, RopeExt as _},
     label::Label,
-    menu::{ContextMenuExt as _, PopupMenuItem},
+    menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenuItem},
     notification::Notification,
     scroll::ScrollableElement as _,
     select::{Select, SelectEvent, SelectItem, SelectState},
@@ -44,7 +44,7 @@ use serde_json::{Value, json};
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fs,
     path::PathBuf,
     rc::Rc,
@@ -98,11 +98,16 @@ impl AssetSource for Assets {
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/copy.svg" => Some(include_bytes!("../assets/icons/copy.svg")),
+            "icons/delete.svg" => Some(include_bytes!("../assets/icons/delete.svg")),
+            "icons/ellipsis.svg" => Some(include_bytes!("../assets/icons/ellipsis.svg")),
+            "icons/folder.svg" => Some(include_bytes!("../assets/icons/folder.svg")),
+            "icons/folder-open.svg" => Some(include_bytes!("../assets/icons/folder-open.svg")),
             "icons/globe.svg" => Some(include_bytes!("../assets/icons/globe.svg")),
             "icons/loader-circle.svg" => Some(include_bytes!("../assets/icons/loader-circle.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             "icons/palette.svg" => Some(include_bytes!("../assets/icons/palette.svg")),
             "icons/redo-2.svg" => Some(include_bytes!("../assets/icons/redo-2.svg")),
+            "icons/replace.svg" => Some(include_bytes!("../assets/icons/replace.svg")),
             "icons/search.svg" => Some(include_bytes!("../assets/icons/search.svg")),
             "icons/settings.svg" => Some(include_bytes!("../assets/icons/settings.svg")),
             "icons/settings-2.svg" => Some(include_bytes!("../assets/icons/settings-2.svg")),
@@ -130,11 +135,16 @@ impl AssetSource for Assets {
             "chevron-down.svg",
             "close.svg",
             "copy.svg",
+            "delete.svg",
+            "ellipsis.svg",
+            "folder.svg",
+            "folder-open.svg",
             "globe.svg",
             "loader-circle.svg",
             "plus.svg",
             "palette.svg",
             "redo-2.svg",
+            "replace.svg",
             "search.svg",
             "settings.svg",
             "settings-2.svg",
@@ -331,11 +341,12 @@ fn active_tab_index_after_close(active: usize, closing: usize, tab_count: usize)
 #[cfg(test)]
 mod command_palette_tests {
     use super::{
-        HttpStreamEvent, PaletteCommand, RequestStreamEvent, Rope, active_tab_index_after_close,
-        ascii_contains_ignore_case, formatting_stream_chunk, next_palette_index,
-        open_variable_at_cursor, open_variable_at_rope_cursor, previous_palette_index,
-        push_stream_event_batch, redact_secret_values, split_history_error, template_visual_state,
-        variable_completion_context_at_cursor, variable_completion_insert_text,
+        HttpStreamEvent, PaletteCommand, RequestDestination, RequestStreamEvent, Rope,
+        active_tab_index_after_close, ascii_contains_ignore_case, formatting_stream_chunk,
+        next_palette_index, open_variable_at_cursor, open_variable_at_rope_cursor,
+        previous_palette_index, push_stream_event_batch, redact_secret_values, split_history_error,
+        template_visual_state, variable_completion_context_at_cursor,
+        variable_completion_insert_text,
     };
 
     #[test]
@@ -368,6 +379,28 @@ mod command_palette_tests {
         assert_eq!(previous_palette_index(2, 4), Some(1));
         assert_eq!(next_palette_index(0, 0), None);
         assert_eq!(previous_palette_index(0, 0), None);
+    }
+
+    #[test]
+    fn destination_filter_matches_environment_nested_path_and_unfiled_alias() {
+        let nested = RequestDestination {
+            environment_id: "env-1".into(),
+            environment_name: "Production API".into(),
+            folder_id: Some("folder-1".into()),
+            folder_path: Some("Backend / Authentication".into()),
+        };
+        assert!(nested.matches("production auth"));
+        assert!(nested.matches("backend"));
+        assert!(!nested.matches("staging"));
+
+        let root = RequestDestination {
+            environment_id: "env-2".into(),
+            environment_name: "Staging".into(),
+            folder_id: None,
+            folder_path: None,
+        };
+        assert!(root.matches("staging unfiled"));
+        assert!(root.matches("root"));
     }
 
     #[test]
@@ -1300,12 +1333,14 @@ struct AlulaApp {
     state_paths: StatePaths,
     persistence_dirty: Arc<AtomicBool>,
     environment_name: Entity<InputState>,
+    environment_folder_name: Entity<InputState>,
     environment_search: Entity<InputState>,
     history_search: Entity<InputState>,
     environment_request_search: Entity<InputState>,
     environment_variable_search: Entity<InputState>,
     selected_environment_id: Option<String>,
     environment_detail_tab: EnvironmentDetailTab,
+    expanded_environment_folder_ids: HashSet<String>,
     hovered_environment_id: Option<String>,
     hovered_environment_request_id: Option<String>,
     hovered_environment_variable_id: Option<String>,
@@ -1321,6 +1356,44 @@ struct CommandPaletteView {
     app: Entity<AlulaApp>,
     input: Entity<InputState>,
     selected: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RequestDestination {
+    environment_id: String,
+    environment_name: String,
+    folder_id: Option<String>,
+    folder_path: Option<String>,
+}
+
+impl RequestDestination {
+    fn matches(&self, query: &str) -> bool {
+        query.split_whitespace().all(|term| {
+            ascii_contains_ignore_case(&self.environment_name, term)
+                || self
+                    .folder_path
+                    .as_deref()
+                    .is_some_and(|path| ascii_contains_ignore_case(path, term))
+                || (self.folder_path.is_none()
+                    && ascii_contains_ignore_case("unfiled environment root", term))
+        })
+    }
+
+    fn path_label(&self) -> &str {
+        self.folder_path.as_deref().unwrap_or("Unfiled")
+    }
+}
+
+struct RequestDestinationPickerView {
+    app: Entity<AlulaApp>,
+    request_id: String,
+    destinations: Arc<Vec<RequestDestination>>,
+    filtered: Vec<usize>,
+    input: Entity<InputState>,
+    selected: usize,
+    current_environment_id: Option<String>,
+    current_folder_id: Option<String>,
+    scroll: UniformListScrollHandle,
 }
 
 struct McpUiCall {
@@ -1561,6 +1634,297 @@ impl Render for CommandPaletteView {
     }
 }
 
+impl RequestDestinationPickerView {
+    fn new(
+        app: Entity<AlulaApp>,
+        request_id: String,
+        destinations: Arc<Vec<RequestDestination>>,
+        current_environment_id: Option<String>,
+        current_folder_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Search environments and folder paths…")
+        });
+        cx.subscribe_in(
+            &input,
+            window,
+            |this, input, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let query = input.read(cx).value();
+                    this.filtered = this
+                        .destinations
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, destination)| {
+                            destination.matches(query.as_ref()).then_some(index)
+                        })
+                        .collect();
+                    this.selected = 0;
+                    this.scroll.scroll_to_item(0, ScrollStrategy::Top);
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => this.confirm(window, cx),
+                _ => {}
+            },
+        )
+        .detach();
+        let filtered = (0..destinations.len()).collect();
+        Self {
+            app,
+            request_id,
+            destinations,
+            filtered,
+            input,
+            selected: 0,
+            current_environment_id,
+            current_folder_id,
+            scroll: UniformListScrollHandle::new(),
+        }
+    }
+
+    fn is_current(&self, destination: &RequestDestination) -> bool {
+        self.current_environment_id.as_deref() == Some(&destination.environment_id)
+            && self.current_folder_id.as_deref() == destination.folder_id.as_deref()
+    }
+
+    fn select_previous(&mut self, cx: &mut Context<Self>) {
+        if let Some(selected) = previous_palette_index(self.selected, self.filtered.len()) {
+            self.selected = selected;
+            self.scroll.scroll_to_item(selected, ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
+
+    fn select_next(&mut self, cx: &mut Context<Self>) {
+        if let Some(selected) = next_palette_index(self.selected, self.filtered.len()) {
+            self.selected = selected;
+            self.scroll.scroll_to_item(selected, ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
+
+    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(&destination_index) = self.filtered.get(self.selected) else {
+            return;
+        };
+        self.move_to(destination_index, window, cx);
+    }
+
+    fn move_to(&mut self, destination_index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(destination) = self.destinations.get(destination_index).cloned() else {
+            return;
+        };
+        self.app.update(cx, |this, cx| {
+            this.assign_request_to_environment_folder(
+                &self.request_id,
+                &destination.environment_id,
+                destination.folder_id.as_deref(),
+                cx,
+            )
+        });
+        window.close_dialog(cx);
+    }
+
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event.keystroke.key.as_str() {
+            "up" => self.select_previous(cx),
+            "down" => self.select_next(cx),
+            "escape" => window.close_dialog(cx),
+            _ => return,
+        }
+        window.prevent_default();
+        cx.stop_propagation();
+    }
+
+    fn destination_row(
+        &self,
+        filtered_index: usize,
+        picker: Entity<Self>,
+        cx: &mut App,
+    ) -> Option<AnyElement> {
+        let destination_index = *self.filtered.get(filtered_index)?;
+        let destination = self.destinations.get(destination_index)?;
+        let selected = filtered_index == self.selected;
+        let current = self.is_current(destination);
+        let hover_picker = picker.clone();
+        let click_picker = picker.clone();
+        Some(
+            div()
+                .id(("request-destination", destination_index))
+                .h(px(48.))
+                .w_full()
+                .px_3()
+                .flex()
+                .items_center()
+                .gap_3()
+                .rounded(px(7.))
+                .cursor_pointer()
+                .text_color(if selected {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .when(selected, |this| this.bg(cx.theme().accent))
+                .when(!selected, |this| {
+                    this.hover(|this| this.bg(cx.theme().secondary.lighten(0.1)))
+                })
+                .child(
+                    div()
+                        .w(px(20.))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            Icon::new(if destination.folder_id.is_some() {
+                                IconName::FolderOpen
+                            } else {
+                                IconName::Globe
+                            })
+                            .size(px(14.))
+                            .text_color(if selected {
+                                cx.theme().primary
+                            } else {
+                                cx.theme().muted_foreground.opacity(0.72)
+                            }),
+                        ),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.))
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(px(11.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(cx.theme().foreground)
+                                .child(destination.environment_name.clone()),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .text_size(px(10.))
+                                .text_color(cx.theme().muted_foreground.opacity(0.78))
+                                .child(destination.path_label().to_owned()),
+                        ),
+                )
+                .when(current, |this| {
+                    this.child(
+                        div()
+                            .flex_shrink_0()
+                            .px_2()
+                            .py(px(2.))
+                            .rounded_full()
+                            .bg(cx.theme().primary.opacity(0.12))
+                            .text_size(px(9.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().primary)
+                            .child("Current"),
+                    )
+                })
+                .on_hover(move |hovered, _, cx| {
+                    if *hovered {
+                        hover_picker.update(cx, |this, cx| {
+                            if this.selected != filtered_index {
+                                this.selected = filtered_index;
+                                cx.notify();
+                            }
+                        });
+                    }
+                })
+                .on_click(move |_, window, cx| {
+                    click_picker.update(cx, |this, cx| this.move_to(destination_index, window, cx));
+                })
+                .into_any_element(),
+        )
+    }
+}
+
+impl Render for RequestDestinationPickerView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
+        let picker = cx.entity();
+        let result_count = self.filtered.len();
+        let results = if result_count == 0 {
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_size(px(11.))
+                .text_color(cx.theme().muted_foreground)
+                .child("No matching environments or folders")
+                .into_any_element()
+        } else {
+            uniform_list(
+                "request-destination-results",
+                result_count,
+                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                    range
+                        .filter_map(|index| this.destination_row(index, picker.clone(), cx))
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .size_full()
+            .track_scroll(self.scroll.clone())
+            .into_any_element()
+        };
+
+        div()
+            .id("request-destination-picker")
+            .h(px(460.))
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .on_key_down(cx.listener(Self::handle_key_down))
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Search by environment name or any part of a nested folder path."),
+            )
+            .child(
+                div().h(px(32.)).flex_shrink_0().child(
+                    Input::new(&self.input)
+                        .prefix(IconName::Search)
+                        .text_size(px(11.))
+                        .rounded(px(6.))
+                        .h_full()
+                        .w_full(),
+                ),
+            )
+            .child(div().flex_1().min_h_0().flex().flex_col().child(results))
+            .child(
+                div()
+                    .pt_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .text_size(px(9.))
+                    .text_color(cx.theme().muted_foreground.opacity(0.72))
+                    .child("↑↓ Navigate")
+                    .child("↵ Move")
+                    .child("Esc Close"),
+            )
+    }
+}
+
 impl AlulaApp {
     fn new(
         theme_config: AppConfig,
@@ -1651,12 +2015,15 @@ impl AlulaApp {
             persistence_dirty: Arc::new(AtomicBool::new(false)),
             environment_name: cx
                 .new(|cx| InputState::new(window, cx).placeholder("Production, Staging, Local…")),
+            environment_folder_name: cx
+                .new(|cx| InputState::new(window, cx).placeholder("Authentication, Billing…")),
             environment_search,
             history_search,
             environment_request_search,
             environment_variable_search,
             selected_environment_id: None,
             environment_detail_tab: EnvironmentDetailTab::Requests,
+            expanded_environment_folder_ids: HashSet::new(),
             hovered_environment_id: None,
             hovered_environment_request_id: None,
             hovered_environment_variable_id: None,
@@ -1976,9 +2343,8 @@ impl AlulaApp {
                     .find(|environment| environment.id == environment_id)
                     .map(|environment| {
                         environment
-                            .requests
-                            .iter()
-                            .map(|request| request.id.clone())
+                            .request_ids()
+                            .map(str::to_owned)
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default();
@@ -1997,6 +2363,89 @@ impl AlulaApp {
                     for request_id in affected_request_ids {
                         self.refresh_request_variable_names(&request_id, cx);
                     }
+                    self.persistence_dirty.store(true, Ordering::Release);
+                    cx.notify();
+                }
+                reply
+            }
+            "create_environment_folder" => {
+                let Some(environment_id) = arguments.get("environment_id").and_then(Value::as_str)
+                else {
+                    return reply_to_tool(AgentReply::error("environment_id must be a string"));
+                };
+                let Some(name) = arguments.get("name").and_then(Value::as_str) else {
+                    return reply_to_tool(AgentReply::error("name must be a string"));
+                };
+                if arguments
+                    .get("parent_folder_id")
+                    .is_some_and(|value| !value.is_string() && !value.is_null())
+                {
+                    return reply_to_tool(AgentReply::error("parent_folder_id must be a string"));
+                }
+                let workspace = self.workspace_snapshot(cx);
+                let reply = apply_environment_agent_command(
+                    &workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::CreateFolder {
+                        environment_id: environment_id.to_owned(),
+                        parent_folder_id: arguments
+                            .get("parent_folder_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        name: name.to_owned(),
+                    },
+                );
+                if reply.ok {
+                    self.persistence_dirty.store(true, Ordering::Release);
+                    cx.notify();
+                }
+                reply
+            }
+            "rename_environment_folder" => {
+                let Some(environment_id) = arguments.get("environment_id").and_then(Value::as_str)
+                else {
+                    return reply_to_tool(AgentReply::error("environment_id must be a string"));
+                };
+                let Some(folder_id) = arguments.get("folder_id").and_then(Value::as_str) else {
+                    return reply_to_tool(AgentReply::error("folder_id must be a string"));
+                };
+                let Some(name) = arguments.get("name").and_then(Value::as_str) else {
+                    return reply_to_tool(AgentReply::error("name must be a string"));
+                };
+                let workspace = self.workspace_snapshot(cx);
+                let reply = apply_environment_agent_command(
+                    &workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::RenameFolder {
+                        environment_id: environment_id.to_owned(),
+                        folder_id: folder_id.to_owned(),
+                        name: name.to_owned(),
+                    },
+                );
+                if reply.ok {
+                    self.persistence_dirty.store(true, Ordering::Release);
+                    cx.notify();
+                }
+                reply
+            }
+            "delete_environment_folder" => {
+                let Some(environment_id) = arguments.get("environment_id").and_then(Value::as_str)
+                else {
+                    return reply_to_tool(AgentReply::error("environment_id must be a string"));
+                };
+                let Some(folder_id) = arguments.get("folder_id").and_then(Value::as_str) else {
+                    return reply_to_tool(AgentReply::error("folder_id must be a string"));
+                };
+                let workspace = self.workspace_snapshot(cx);
+                let reply = apply_environment_agent_command(
+                    &workspace,
+                    &mut self.environments,
+                    EnvironmentAgentCommand::DeleteFolder {
+                        environment_id: environment_id.to_owned(),
+                        folder_id: folder_id.to_owned(),
+                    },
+                );
+                if reply.ok {
                     self.persistence_dirty.store(true, Ordering::Release);
                     cx.notify();
                 }
@@ -2039,9 +2488,8 @@ impl AlulaApp {
                         .find(|environment| environment.id == environment_id)
                         .map(|environment| {
                             environment
-                                .requests
-                                .iter()
-                                .map(|request| request.id.clone())
+                                .request_ids()
+                                .map(str::to_owned)
                                 .collect::<Vec<_>>()
                         })
                         .unwrap_or_default();
@@ -2061,12 +2509,22 @@ impl AlulaApp {
                 let Some(request_id) = arguments.get("request_id").and_then(Value::as_str) else {
                     return reply_to_tool(AgentReply::error("request_id must be a string"));
                 };
+                if arguments
+                    .get("folder_id")
+                    .is_some_and(|value| !value.is_string() && !value.is_null())
+                {
+                    return reply_to_tool(AgentReply::error("folder_id must be a string"));
+                }
                 let workspace = self.workspace_snapshot(cx);
                 let reply = apply_environment_agent_command(
                     &workspace,
                     &mut self.environments,
                     EnvironmentAgentCommand::AssignRequest {
                         environment_id: environment_id.to_owned(),
+                        folder_id: arguments
+                            .get("folder_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
                         request_id: request_id.to_owned(),
                     },
                 );
@@ -2584,12 +3042,13 @@ impl AlulaApp {
     fn add_environment_request(
         &mut self,
         environment_id: &str,
+        folder_id: Option<&str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.add_request(&ClickEvent::default(), window, cx);
         let request_id = self.tabs[self.active_tab].draft.id.clone();
-        self.assign_request_to_environment(&request_id, environment_id, cx);
+        self.assign_request_to_environment_folder(&request_id, environment_id, folder_id, cx);
     }
 
     fn close_request(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -2694,6 +3153,143 @@ impl AlulaApp {
         });
     }
 
+    fn open_environment_folder_dialog(
+        &mut self,
+        environment_id: String,
+        parent_folder_id: Option<String>,
+        folder_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let existing_name = folder_id
+            .as_deref()
+            .and_then(|folder_id| {
+                self.environments
+                    .environments
+                    .iter()
+                    .find(|environment| environment.id == environment_id)
+                    .and_then(|environment| environment.find_folder(folder_id))
+            })
+            .map(|folder| folder.name.clone())
+            .unwrap_or_default();
+        self.environment_folder_name.update(cx, |input, cx| {
+            input.set_value(existing_name, window, cx);
+        });
+        let editing = folder_id.is_some();
+        let input = self.environment_folder_name.clone();
+        let save_input = input.clone();
+        let app = cx.entity();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            dialog
+                .title(
+                    Label::new(if editing {
+                        "Rename folder"
+                    } else {
+                        "New folder"
+                    })
+                    .font_weight(FontWeight::SEMIBOLD),
+                )
+                .w(px(440.))
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            Label::new("Name")
+                                .text_sm()
+                                .font_weight(FontWeight::SEMIBOLD),
+                        )
+                        .child(Input::new(&input).w_full()),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(if editing {
+                            "Rename folder"
+                        } else {
+                            "Create folder"
+                        })
+                        .cancel_text("Cancel")
+                        .cancel_variant(ButtonVariant::Secondary),
+                )
+                .on_ok({
+                    let app = app.clone();
+                    let environment_id = environment_id.clone();
+                    let parent_folder_id = parent_folder_id.clone();
+                    let folder_id = folder_id.clone();
+                    let save_input = save_input.clone();
+                    move |_, window, cx| {
+                        let name = save_input.read(cx).value().trim().to_owned();
+                        if name.is_empty() {
+                            return false;
+                        }
+                        let reply = app.update(cx, |this, cx| {
+                            let workspace = this.workspace_snapshot(cx);
+                            let command = if let Some(folder_id) = folder_id.clone() {
+                                EnvironmentAgentCommand::RenameFolder {
+                                    environment_id: environment_id.clone(),
+                                    folder_id,
+                                    name,
+                                }
+                            } else {
+                                EnvironmentAgentCommand::CreateFolder {
+                                    environment_id: environment_id.clone(),
+                                    parent_folder_id: parent_folder_id.clone(),
+                                    name,
+                                }
+                            };
+                            let reply = apply_environment_agent_command(
+                                &workspace,
+                                &mut this.environments,
+                                command,
+                            );
+                            if reply.ok {
+                                if let Some(parent_folder_id) = &parent_folder_id {
+                                    this.expanded_environment_folder_ids
+                                        .insert(parent_folder_id.clone());
+                                }
+                                this.persistence_dirty.store(true, Ordering::Release);
+                                cx.notify();
+                            }
+                            reply
+                        });
+                        if !reply.ok {
+                            window.push_notification(Notification::error(reply.message), cx);
+                        }
+                        reply.ok
+                    }
+                })
+        });
+    }
+
+    fn delete_environment_folder(
+        &mut self,
+        environment_id: &str,
+        folder_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = self.workspace_snapshot(cx);
+        let reply = apply_environment_agent_command(
+            &workspace,
+            &mut self.environments,
+            EnvironmentAgentCommand::DeleteFolder {
+                environment_id: environment_id.to_owned(),
+                folder_id: folder_id.to_owned(),
+            },
+        );
+        if reply.ok {
+            self.expanded_environment_folder_ids.remove(folder_id);
+            self.persistence_dirty.store(true, Ordering::Release);
+            cx.notify();
+        } else {
+            window.push_notification(Notification::error(reply.message), cx);
+        }
+    }
+
     fn open_delete_environment_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let environments = self.environments.environments.clone();
         let app = cx.entity();
@@ -2715,7 +3311,7 @@ impl AlulaApp {
                     let row_app = app.clone();
                     let environment_id = environment.id.clone();
                     let environment_name = environment.name.clone();
-                    let request_count = environment.requests.len();
+                    let request_count = environment.request_count();
                     choices = choices.child(
                         Button::new(SharedString::from(format!(
                             "palette-delete-environment-{environment_id}"
@@ -3163,9 +3759,8 @@ impl AlulaApp {
                                 environment.variables.push(variable);
                             }
                             let scoped_request_ids = environment
-                                .requests
-                                .iter()
-                                .map(|request| request.id.clone())
+                                .request_ids()
+                                .map(str::to_owned)
                                 .collect::<Vec<_>>();
                             for request_id in scoped_request_ids {
                                 this.refresh_request_variable_names(&request_id, cx);
@@ -3219,9 +3814,8 @@ impl AlulaApp {
             .variables
             .retain(|variable| variable.id != variable_id);
         let scoped_request_ids = environment
-            .requests
-            .iter()
-            .map(|request| request.id.clone())
+            .request_ids()
+            .map(str::to_owned)
             .collect::<Vec<_>>();
         for request_id in scoped_request_ids {
             self.refresh_request_variable_names(&request_id, cx);
@@ -3230,17 +3824,92 @@ impl AlulaApp {
         cx.notify();
     }
 
-    fn assign_request_to_environment(
+    fn open_request_destination_picker(
+        &mut self,
+        request_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.environments.environments.is_empty() {
+            window.push_notification(
+                Notification::info("Create an environment before organizing requests"),
+                cx,
+            );
+            return;
+        }
+
+        let current_environment_id = self
+            .environments
+            .environment_for_request(&request_id)
+            .map(|environment| environment.id.clone());
+        let current_folder_id = self
+            .environments
+            .folder_for_request(&request_id)
+            .map(|folder| folder.id.clone());
+        let mut environments = self.environments.environments.iter().collect::<Vec<_>>();
+        environments.sort_by_key(|environment| environment.name.to_ascii_lowercase());
+
+        let mut destinations = Vec::new();
+        for environment in environments {
+            destinations.push(RequestDestination {
+                environment_id: environment.id.clone(),
+                environment_name: environment.name.clone(),
+                folder_id: None,
+                folder_path: None,
+            });
+            let mut folders = environment.folder_paths();
+            folders.sort_by_key(|(_, path)| path.to_ascii_lowercase());
+            destinations.extend(folders.into_iter().map(|(folder_id, folder_path)| {
+                RequestDestination {
+                    environment_id: environment.id.clone(),
+                    environment_name: environment.name.clone(),
+                    folder_id: Some(folder_id),
+                    folder_path: Some(folder_path),
+                }
+            }));
+        }
+
+        let app = cx.entity();
+        let picker = cx.new(|cx| {
+            RequestDestinationPickerView::new(
+                app,
+                request_id,
+                Arc::new(destinations),
+                current_environment_id,
+                current_folder_id,
+                window,
+                cx,
+            )
+        });
+        let focused_input = picker.read(cx).input.clone();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            dialog
+                .title(Label::new("Move request").font_weight(FontWeight::SEMIBOLD))
+                .w(px(560.))
+                .close_button(true)
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
+                .child(picker.clone())
+        });
+        focused_input.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    fn assign_request_to_environment_folder(
         &mut self,
         request_id: &str,
         environment_id: &str,
+        folder_id: Option<&str>,
         cx: &mut Context<Self>,
     ) {
         let Some(tab) = self.tabs.iter().find(|tab| tab.draft.id == request_id) else {
             return;
         };
         let request = tab.snapshot(cx);
-        if self.environments.assign(environment_id, request).is_ok() {
+        if self
+            .environments
+            .assign_to_folder(environment_id, folder_id, request)
+            .is_ok()
+        {
             self.refresh_request_variable_names(request_id, cx);
             self.persistence_dirty.store(true, Ordering::Release);
             cx.notify();
@@ -3306,12 +3975,7 @@ impl AlulaApp {
             .environments
             .iter()
             .find(|environment| environment.id == environment_id)
-            .and_then(|environment| {
-                environment
-                    .requests
-                    .iter()
-                    .find(|request| request.id == request_id)
-            })
+            .and_then(|environment| environment.request(request_id))
             .cloned();
         if let Some(request) = request {
             self.show_request_tab(request, window, cx);
@@ -4488,13 +5152,7 @@ impl AlulaApp {
 
     fn render_request_tabs(&self, cx: &mut Context<Self>) -> Div {
         let app = cx.entity();
-        let environments = Arc::new(
-            self.environments
-                .environments
-                .iter()
-                .map(|environment| (environment.id.clone(), environment.name.clone()))
-                .collect::<Vec<_>>(),
-        );
+        let has_environments = !self.environments.environments.is_empty();
         let mut bar = div()
             .id("request-tabs")
             .h_full()
@@ -4513,8 +5171,7 @@ impl AlulaApp {
             let assigned_environment = self
                 .environments
                 .environment_for_request(&request_id)
-                .map(|environment| environment.id.clone());
-            let environments = environments.clone();
+                .is_some();
             let menu_app = app.clone();
             let close_app = app.clone();
             let select_app = app.clone();
@@ -4603,30 +5260,23 @@ impl AlulaApp {
                     });
                 })
                 .context_menu(move |mut menu, _, _| {
-                    menu = menu.label("Add to environment");
-                    if environments.is_empty() {
-                        menu = menu.item(PopupMenuItem::new("No environments yet").disabled(true));
-                    } else {
-                        for (environment_id, name) in environments.iter() {
-                            let app = menu_app.clone();
-                            let request_id = request_id.clone();
-                            let environment_id = environment_id.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(name.clone())
-                                    .checked(assigned_environment.as_ref() == Some(&environment_id))
-                                    .on_click(move |_, _, cx| {
-                                        app.update(cx, |this, cx| {
-                                            this.assign_request_to_environment(
-                                                &request_id,
-                                                &environment_id,
-                                                cx,
-                                            )
-                                        });
-                                    }),
-                            );
-                        }
-                    }
-                    if assigned_environment.is_some() {
+                    menu = menu.label("Request organization");
+                    let picker_app = menu_app.clone();
+                    let picker_request_id = request_id.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("Move to environment or folder…")
+                            .disabled(!has_environments)
+                            .on_click(move |_, window, cx| {
+                                picker_app.update(cx, |this, cx| {
+                                    this.open_request_destination_picker(
+                                        picker_request_id.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                    );
+                    if assigned_environment {
                         let app = menu_app.clone();
                         let request_id = request_id.clone();
                         menu = menu.separator().item(
@@ -4974,117 +5624,315 @@ impl AlulaApp {
     fn environment_request_row(
         &self,
         environment_id: &str,
-        request_index: usize,
+        request: &RequestDraft,
         app: Entity<Self>,
         cx: &mut App,
-    ) -> Option<Div> {
-        let environment = self
-            .environments
-            .environments
-            .iter()
-            .find(|environment| environment.id == environment_id)?;
-        let request = environment.requests.get(request_index)?;
+    ) -> Div {
         let hovered = self.hovered_environment_request_id.as_deref() == Some(request.id.as_str());
         let hover_app = app.clone();
         let hover_id = request.id.clone();
         let open_app = app.clone();
-        let open_environment_id = environment.id.clone();
+        let open_environment_id = environment_id.to_owned();
         let open_request_id = request.id.clone();
-        Some(
-            div().h(px(62.)).pt(px(1.)).pb(px(7.)).child(
-                div()
-                    .id(SharedString::from(format!(
-                        "environment-request-row-{}",
+        div().h(px(62.)).pt(px(1.)).pb(px(7.)).child(
+            div()
+                .id(SharedString::from(format!(
+                    "environment-request-row-{}",
+                    request.id
+                )))
+                .relative()
+                .w_full()
+                .h_full()
+                .px(px(11.))
+                .flex()
+                .items_center()
+                .gap(px(11.))
+                .rounded(px(9.))
+                .border_1()
+                .border_color(if hovered {
+                    cx.theme().muted_foreground.opacity(0.32)
+                } else {
+                    cx.theme().border
+                })
+                .bg(if hovered {
+                    cx.theme().secondary
+                } else {
+                    cx.theme().background
+                })
+                .child(method_badge(request.method, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            Label::new(request.display_name())
+                                .truncate()
+                                .text_size(px(12.))
+                                .font_weight(FontWeight(580.)),
+                        )
+                        .child(
+                            Label::new(request.url.clone())
+                                .mt(px(4.))
+                                .truncate()
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .text_size(px(9.))
+                                .text_color(cx.theme().muted_foreground.opacity(0.68)),
+                        ),
+                )
+                .child(
+                    design_button(
+                        SharedString::from(format!("open-environment-request-{}", request.id)),
+                        "Open",
+                    )
+                    .secondary()
+                    .on_click(move |_, window, cx| {
+                        open_app.update(cx, |this, cx| {
+                            this.open_environment_request(
+                                &open_environment_id,
+                                &open_request_id,
+                                window,
+                                cx,
+                            )
+                        });
+                    }),
+                )
+                .on_hover(move |is_hovered, _, cx| {
+                    hover_app.update(cx, |this, cx| {
+                        let next = if *is_hovered {
+                            Some(hover_id.clone())
+                        } else if this.hovered_environment_request_id.as_deref()
+                            == Some(hover_id.as_str())
+                        {
+                            None
+                        } else {
+                            this.hovered_environment_request_id.clone()
+                        };
+                        if this.hovered_environment_request_id != next {
+                            this.hovered_environment_request_id = next;
+                            cx.notify();
+                        }
+                    });
+                })
+                .with_animation(
+                    SharedString::from(format!(
+                        "environment-request-hover-{}-{hovered}",
                         request.id
-                    )))
-                    .relative()
-                    .w_full()
-                    .h_full()
-                    .px(px(11.))
+                    )),
+                    Animation::new(Duration::from_secs_f64(0.12))
+                        .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                    move |this, delta| {
+                        this.opacity(if hovered { 0.98 + 0.02 * delta } else { 1.0 })
+                    },
+                ),
+        )
+    }
+
+    fn render_environment_folder_section(
+        &self,
+        environment_id: &str,
+        folder: &EnvironmentFolder,
+        query: &str,
+        depth: usize,
+        app: Entity<Self>,
+        cx: &mut App,
+    ) -> Option<Div> {
+        let matching_count = folder_matching_request_count(folder, query);
+        if !query.is_empty() && matching_count == 0 {
+            return None;
+        }
+        let folder_requests = folder
+            .requests
+            .iter()
+            .filter(|request| request_matches_query(request, query))
+            .cloned()
+            .collect::<Vec<_>>();
+        let expanded =
+            !query.is_empty() || self.expanded_environment_folder_ids.contains(&folder.id);
+        let add_request_app = app.clone();
+        let add_request_environment_id = environment_id.to_owned();
+        let add_request_folder_id = folder.id.clone();
+        let add_folder_app = app.clone();
+        let add_folder_environment_id = environment_id.to_owned();
+        let add_folder_parent_id = folder.id.clone();
+        let rename_app = app.clone();
+        let rename_environment_id = environment_id.to_owned();
+        let rename_folder_id = folder.id.clone();
+        let delete_app = app.clone();
+        let delete_environment_id = environment_id.to_owned();
+        let delete_folder_id = folder.id.clone();
+        let toggle_app = app.clone();
+        let toggle_folder_id = folder.id.clone();
+        let count = if query.is_empty() {
+            folder.request_count()
+        } else {
+            matching_count
+        };
+        let folder_toggle = div()
+            .id(SharedString::from(format!(
+                "environment-folder-toggle-{}",
+                folder.id
+            )))
+            .h_full()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap_2()
+            .cursor_pointer()
+            .text_size(px(11.))
+            .font_weight(FontWeight(600.))
+            .child(
+                Icon::new(if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .size(px(13.)),
+            )
+            .child(Icon::new(IconName::FolderOpen).size(px(14.)))
+            .child(Label::new(folder.name.clone()).truncate())
+            .child(quiet_badge(count.to_string(), cx))
+            .on_click(move |_, _, cx| {
+                toggle_app.update(cx, |this, cx| {
+                    if !this
+                        .expanded_environment_folder_ids
+                        .remove(&toggle_folder_id)
+                    {
+                        this.expanded_environment_folder_ids
+                            .insert(toggle_folder_id.clone());
+                    }
+                    cx.notify();
+                });
+            });
+        let folder_actions =
+            Button::new(SharedString::from(format!("folder-actions-{}", folder.id)))
+                .ghost()
+                .xsmall()
+                .compact()
+                .icon(IconName::Ellipsis)
+                .tooltip("Folder actions")
+                .dropdown_menu(move |mut menu, _, _| {
+                    let action_app = add_folder_app.clone();
+                    let action_environment_id = add_folder_environment_id.clone();
+                    let action_parent_id = add_folder_parent_id.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("New folder")
+                            .icon(IconName::Folder)
+                            .on_click(move |_, window, cx| {
+                                action_app.update(cx, |this, cx| {
+                                    this.open_environment_folder_dialog(
+                                        action_environment_id.clone(),
+                                        Some(action_parent_id.clone()),
+                                        None,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                    );
+
+                    let action_app = rename_app.clone();
+                    let action_environment_id = rename_environment_id.clone();
+                    let action_folder_id = rename_folder_id.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("Rename")
+                            .icon(IconName::Replace)
+                            .on_click(move |_, window, cx| {
+                                action_app.update(cx, |this, cx| {
+                                    this.open_environment_folder_dialog(
+                                        action_environment_id.clone(),
+                                        None,
+                                        Some(action_folder_id.clone()),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                    );
+
+                    let action_app = delete_app.clone();
+                    let action_environment_id = delete_environment_id.clone();
+                    let action_folder_id = delete_folder_id.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new("Delete")
+                            .icon(IconName::Delete)
+                            .on_click(move |_, window, cx| {
+                                action_app.update(cx, |this, cx| {
+                                    this.delete_environment_folder(
+                                        &action_environment_id,
+                                        &action_folder_id,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                    );
+
+                    let action_app = add_request_app.clone();
+                    let action_environment_id = add_request_environment_id.clone();
+                    let action_folder_id = add_request_folder_id.clone();
+                    menu.item(
+                        PopupMenuItem::new("New request")
+                            .icon(IconName::Plus)
+                            .on_click(move |_, window, cx| {
+                                action_app.update(cx, |this, cx| {
+                                    this.add_environment_request(
+                                        &action_environment_id,
+                                        Some(&action_folder_id),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                    )
+                })
+                .anchor(Corner::TopRight);
+        let mut section = div()
+            .ml(px(depth as f32 * 14.))
+            .mb_2()
+            .flex()
+            .flex_col()
+            .rounded(px(8.))
+            .border_1()
+            .border_color(cx.theme().border)
+            .px_1()
+            .child(
+                div()
+                    .h(px(38.))
+                    .px_2()
                     .flex()
                     .items_center()
-                    .gap(px(11.))
-                    .rounded(px(9.))
-                    .border_1()
-                    .border_color(if hovered {
-                        cx.theme().muted_foreground.opacity(0.32)
-                    } else {
-                        cx.theme().border
-                    })
-                    .bg(if hovered {
-                        cx.theme().secondary
-                    } else {
-                        cx.theme().background
-                    })
-                    .child(method_badge(request.method, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                Label::new(request.display_name())
-                                    .truncate()
-                                    .text_size(px(12.))
-                                    .font_weight(FontWeight(580.)),
-                            )
-                            .child(
-                                Label::new(request.url.clone())
-                                    .mt(px(4.))
-                                    .truncate()
-                                    .font_family(cx.theme().mono_font_family.clone())
-                                    .text_size(px(9.))
-                                    .text_color(cx.theme().muted_foreground.opacity(0.68)),
-                            ),
-                    )
-                    .child(
-                        design_button(
-                            SharedString::from(format!("open-environment-request-{}", request.id)),
-                            "Open",
-                        )
-                        .secondary()
-                        .on_click(move |_, window, cx| {
-                            open_app.update(cx, |this, cx| {
-                                this.open_environment_request(
-                                    &open_environment_id,
-                                    &open_request_id,
-                                    window,
-                                    cx,
-                                )
-                            });
-                        }),
-                    )
-                    .on_hover(move |is_hovered, _, cx| {
-                        hover_app.update(cx, |this, cx| {
-                            let next = if *is_hovered {
-                                Some(hover_id.clone())
-                            } else if this.hovered_environment_request_id.as_deref()
-                                == Some(hover_id.as_str())
-                            {
-                                None
-                            } else {
-                                this.hovered_environment_request_id.clone()
-                            };
-                            if this.hovered_environment_request_id != next {
-                                this.hovered_environment_request_id = next;
-                                cx.notify();
-                            }
-                        });
-                    })
-                    .with_animation(
-                        SharedString::from(format!(
-                            "environment-request-hover-{}-{hovered}",
-                            request.id
-                        )),
-                        Animation::new(Duration::from_secs_f64(0.12))
-                            .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
-                        move |this, delta| {
-                            this.opacity(if hovered { 0.98 + 0.02 * delta } else { 1.0 })
-                        },
-                    ),
-            ),
-        )
+                    .gap_2()
+                    .child(folder_toggle)
+                    .child(folder_actions),
+            );
+        if expanded {
+            let mut child_folders = folder.folders.iter().collect::<Vec<_>>();
+            child_folders.sort_by_key(|folder| folder.name.to_ascii_lowercase());
+            for child in child_folders {
+                if let Some(child_section) = self.render_environment_folder_section(
+                    environment_id,
+                    child,
+                    query,
+                    depth + 1,
+                    app.clone(),
+                    cx,
+                ) {
+                    section = section.child(child_section);
+                }
+            }
+            for request in &folder_requests {
+                section = section.child(self.environment_request_row(
+                    environment_id,
+                    request,
+                    app.clone(),
+                    cx,
+                ));
+            }
+        }
+        Some(section)
     }
 
     fn render_environment_request_rows(
@@ -5098,21 +5946,19 @@ impl AlulaApp {
             .value()
             .trim()
             .to_ascii_lowercase();
-        let filtered_indices = environment
+        let matching_count = environment
             .requests
             .iter()
-            .enumerate()
-            .filter_map(|(index, request)| {
-                (query.is_empty()
-                    || ascii_contains_ignore_case(&request.name, &query)
-                    || ascii_contains_ignore_case(&request.url, &query)
-                    || ascii_contains_ignore_case(request.method.as_str(), &query))
-                .then_some(index)
-            })
-            .collect::<Vec<_>>();
-        if filtered_indices.is_empty() {
+            .filter(|request| request_matches_query(request, &query))
+            .count()
+            + environment
+                .folders
+                .iter()
+                .map(|folder| folder_matching_request_count(folder, &query))
+                .sum::<usize>();
+        if matching_count == 0 && (!query.is_empty() || environment.folders.is_empty()) {
             return empty_state(
-                if query.is_empty() {
+                if query.is_empty() && environment.folders.is_empty() {
                     "No requests yet"
                 } else {
                     "No matching requests"
@@ -5128,26 +5974,59 @@ impl AlulaApp {
 
         let app = cx.entity();
         let environment_id = environment.id.clone();
-        let list_id = SharedString::from(format!("environment-requests-{environment_id}"));
-        div().size_full().min_h_0().child(
-            uniform_list(
-                list_id,
-                filtered_indices.len(),
-                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                    range
-                        .filter_map(|index| {
-                            this.environment_request_row(
-                                &environment_id,
-                                filtered_indices[index],
-                                app.clone(),
-                                cx,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                }),
-            )
-            .size_full(),
-        )
+        let root_requests = environment
+            .requests
+            .iter()
+            .filter(|request| request_matches_query(request, &query))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut list = div()
+            .size_full()
+            .min_h_0()
+            .overflow_y_scrollbar()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .pb_2();
+
+        let mut folders = environment.folders.iter().collect::<Vec<_>>();
+        folders.sort_by_key(|folder| folder.name.to_ascii_lowercase());
+        for folder in folders {
+            if let Some(section) = self.render_environment_folder_section(
+                &environment_id,
+                folder,
+                &query,
+                0,
+                app.clone(),
+                cx,
+            ) {
+                list = list.child(section);
+            }
+        }
+        if !root_requests.is_empty() {
+            let mut root_section = div().flex().flex_col().child(
+                div()
+                    .h(px(30.))
+                    .px_2()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(11.))
+                    .font_weight(FontWeight(600.))
+                    .child("Requests")
+                    .child(quiet_badge(root_requests.len().to_string(), cx)),
+            );
+            for request in &root_requests {
+                root_section = root_section.child(self.environment_request_row(
+                    &environment_id,
+                    request,
+                    app.clone(),
+                    cx,
+                ));
+            }
+            list = list.child(root_section);
+        }
+        div().size_full().min_h_0().child(list)
     }
 
     fn render_environment_detail(
@@ -5164,6 +6043,8 @@ impl AlulaApp {
         let variables_selected = self.environment_detail_tab == EnvironmentDetailTab::Variables;
         let request_tab_app = app.clone();
         let variable_tab_app = app.clone();
+        let new_folder_app = app.clone();
+        let new_folder_environment_id = environment.id.clone();
         let (search, rows, add_action) = if requests_selected {
             let add_app = app.clone();
             let add_environment_id = environment.id.clone();
@@ -5184,7 +6065,7 @@ impl AlulaApp {
                     .primary()
                     .on_click(move |_, window, cx| {
                         add_app.update(cx, |this, cx| {
-                            this.add_environment_request(&add_environment_id, window, cx)
+                            this.add_environment_request(&add_environment_id, None, window, cx)
                         });
                     }),
                 ),
@@ -5274,7 +6155,7 @@ impl AlulaApp {
                                 .child(
                                     Label::new(format!(
                                         "{} requests · {} variables · Active environment",
-                                        environment.requests.len(),
+                                        environment.request_count(),
                                         environment.variables.len()
                                     ))
                                     .text_size(px(10.))
@@ -5331,7 +6212,7 @@ impl AlulaApp {
                                             .font_family(cx.theme().mono_font_family.clone())
                                             .text_size(px(9.))
                                             .text_color(cx.theme().muted_foreground)
-                                            .child(environment.requests.len().to_string()),
+                                            .child(environment.request_count().to_string()),
                                     ),
                                 )
                                 .when(requests_selected, |this| {
@@ -5424,7 +6305,34 @@ impl AlulaApp {
                                 .items_center()
                                 .gap_2()
                                 .child(div().w(px(280.)).child(search))
-                                .child(div().ml_auto().children(add_action)),
+                                .child(
+                                    div()
+                                        .ml_auto()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .when(requests_selected, |this| {
+                                            this.child(
+                                                design_button(
+                                                    "environment-detail-add-folder",
+                                                    "New folder",
+                                                )
+                                                .secondary()
+                                                .on_click(move |_, window, cx| {
+                                                    new_folder_app.update(cx, |this, cx| {
+                                                        this.open_environment_folder_dialog(
+                                                            new_folder_environment_id.clone(),
+                                                            None,
+                                                            None,
+                                                            window,
+                                                            cx,
+                                                        )
+                                                    });
+                                                }),
+                                            )
+                                        })
+                                        .children(add_action),
+                                ),
                         )
                         .child(div().flex_1().min_h_0().child(rows)),
                 ),
@@ -5512,7 +6420,7 @@ impl AlulaApp {
                                             Label::new(format!(
                                                 "{} variables · {} requests",
                                                 environment.variables.len(),
-                                                environment.requests.len()
+                                                environment.request_count()
                                             ))
                                             .mt(px(5.))
                                             .text_size(px(10.))
@@ -7491,6 +8399,26 @@ fn ascii_contains_ignore_case(haystack: &str, lowercase_needle: &str) -> bool {
         .as_bytes()
         .windows(needle.len())
         .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn request_matches_query(request: &RequestDraft, query: &str) -> bool {
+    query.is_empty()
+        || ascii_contains_ignore_case(&request.name, query)
+        || ascii_contains_ignore_case(&request.url, query)
+        || ascii_contains_ignore_case(request.method.as_str(), query)
+}
+
+fn folder_matching_request_count(folder: &EnvironmentFolder, query: &str) -> usize {
+    folder
+        .requests
+        .iter()
+        .filter(|request| request_matches_query(request, query))
+        .count()
+        + folder
+            .folders
+            .iter()
+            .map(|folder| folder_matching_request_count(folder, query))
+            .sum::<usize>()
 }
 
 fn split_history_error(error: &str) -> (String, Option<String>) {

@@ -112,6 +112,9 @@ fn embedded_streamable_http_obeys_transport_and_dispatches_tools() {
     assert!(tool_names.contains(&"create_request"));
     assert!(tool_names.contains(&"send_request"));
     assert!(tool_names.contains(&"set_environment_variable"));
+    assert!(tool_names.contains(&"create_environment_folder"));
+    assert!(tool_names.contains(&"rename_environment_folder"));
+    assert!(tool_names.contains(&"delete_environment_folder"));
     assert!(tool_names.contains(&"save_theme"));
 
     let call = post(

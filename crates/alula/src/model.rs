@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -6,7 +9,12 @@ use url::Url;
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn next_id(prefix: &str) -> String {
-    format!("{prefix}-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed))
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{timestamp:x}-{sequence:x}")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -96,6 +96,20 @@ pub enum EnvironmentAgentCommand {
     DeleteEnvironment {
         environment_id: String,
     },
+    CreateFolder {
+        environment_id: String,
+        parent_folder_id: Option<String>,
+        name: String,
+    },
+    RenameFolder {
+        environment_id: String,
+        folder_id: String,
+        name: String,
+    },
+    DeleteFolder {
+        environment_id: String,
+        folder_id: String,
+    },
     SetVariable {
         environment_id: String,
         name: String,
@@ -104,6 +118,7 @@ pub enum EnvironmentAgentCommand {
     },
     AssignRequest {
         environment_id: String,
+        folder_id: Option<String>,
         request_id: String,
     },
     RemoveRequest {
@@ -307,6 +322,82 @@ pub fn apply_environment_agent_command(
                 .expect("environment existence checked");
             AgentReply::success("environment deleted", environment)
         }
+        EnvironmentAgentCommand::CreateFolder {
+            environment_id,
+            parent_folder_id,
+            name,
+        } => {
+            let name = name.trim();
+            if name.is_empty() {
+                return AgentReply::error("folder name cannot be empty");
+            }
+            let duplicate = environments
+                .environments
+                .iter()
+                .find(|environment| environment.id == environment_id)
+                .and_then(|environment| {
+                    environment.folder_name_exists_in(parent_folder_id.as_deref(), name)
+                })
+                .unwrap_or(false);
+            if duplicate {
+                return AgentReply::error("a folder with that name already exists");
+            }
+            match environments.create_folder(&environment_id, parent_folder_id.as_deref(), name) {
+                Ok(folder_id) => AgentReply::success(
+                    "folder created",
+                    json!({
+                        "environment_id": environment_id,
+                        "parent_folder_id": parent_folder_id,
+                        "folder_id": folder_id,
+                    }),
+                ),
+                Err(error) => AgentReply::error(error.to_string()),
+            }
+        }
+        EnvironmentAgentCommand::RenameFolder {
+            environment_id,
+            folder_id,
+            name,
+        } => {
+            let name = name.trim();
+            if name.is_empty() {
+                return AgentReply::error("folder name cannot be empty");
+            }
+            let duplicate = environments
+                .environments
+                .iter()
+                .find(|environment| environment.id == environment_id)
+                .and_then(|environment| environment.sibling_folder_name_exists(&folder_id, name))
+                .unwrap_or(false);
+            if duplicate {
+                return AgentReply::error("a folder with that name already exists");
+            }
+            match environments.rename_folder(&environment_id, &folder_id, name) {
+                Ok(()) => AgentReply::success(
+                    "folder renamed",
+                    json!({
+                        "environment_id": environment_id,
+                        "folder_id": folder_id,
+                        "name": name,
+                    }),
+                ),
+                Err(error) => AgentReply::error(error.to_string()),
+            }
+        }
+        EnvironmentAgentCommand::DeleteFolder {
+            environment_id,
+            folder_id,
+        } => match environments.delete_folder(&environment_id, &folder_id) {
+            Ok(moved_request_count) => AgentReply::success(
+                "folder deleted; its contents were moved to its parent",
+                json!({
+                    "environment_id": environment_id,
+                    "folder_id": folder_id,
+                    "moved_request_count": moved_request_count,
+                }),
+            ),
+            Err(error) => AgentReply::error(error.to_string()),
+        },
         EnvironmentAgentCommand::SetVariable {
             environment_id,
             name,
@@ -381,6 +472,7 @@ pub fn apply_environment_agent_command(
         }
         EnvironmentAgentCommand::AssignRequest {
             environment_id,
+            folder_id,
             request_id,
         } => {
             let Some(request) = workspace
@@ -391,10 +483,14 @@ pub fn apply_environment_agent_command(
             else {
                 return AgentReply::error("request not found");
             };
-            match environments.assign(&environment_id, request) {
+            match environments.assign_to_folder(&environment_id, folder_id.as_deref(), request) {
                 Ok(()) => AgentReply::success(
-                    "request assigned to environment",
-                    json!({ "environment_id": environment_id, "request_id": request_id }),
+                    "request assigned to environment folder",
+                    json!({
+                        "environment_id": environment_id,
+                        "folder_id": folder_id,
+                        "request_id": request_id,
+                    }),
                 ),
                 Err(error) => AgentReply::error(error.to_string()),
             }
@@ -478,7 +574,7 @@ fn upsert_field(
 
 /// Number of contracts returned by [`mcp_tools`]. Kept separately so UI paint
 /// paths do not allocate and construct every JSON schema merely to show a badge.
-pub const MCP_TOOL_COUNT: usize = 18;
+pub const MCP_TOOL_COUNT: usize = 21;
 
 /// MCP-compatible tool descriptors. A transport adapter can publish these over
 /// stdio or Streamable HTTP without coupling the app core to a model vendor.
@@ -587,6 +683,47 @@ pub fn mcp_tools() -> Vec<Value> {
             "annotations": { "readOnlyHint": false, "destructiveHint": true, "openWorldHint": false }
         }),
         json!({
+            "name": "create_environment_folder",
+            "description": "Create a root request folder or a nested folder inside an existing environment folder.",
+            "inputSchema": {
+                "type": "object", "required": ["environment_id", "name"],
+                "properties": {
+                    "environment_id": { "type": "string" },
+                    "parent_folder_id": { "type": "string", "description": "Optional parent folder ID. Omit to create a root folder." },
+                    "name": { "type": "string" }
+                },
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
+        }),
+        json!({
+            "name": "rename_environment_folder",
+            "description": "Rename a request folder inside an environment.",
+            "inputSchema": {
+                "type": "object", "required": ["environment_id", "folder_id", "name"],
+                "properties": {
+                    "environment_id": { "type": "string" },
+                    "folder_id": { "type": "string" },
+                    "name": { "type": "string" }
+                },
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
+        }),
+        json!({
+            "name": "delete_environment_folder",
+            "description": "Delete a folder and promote its requests and child folders to its parent without closing tabs or changing history.",
+            "inputSchema": {
+                "type": "object", "required": ["environment_id", "folder_id"],
+                "properties": {
+                    "environment_id": { "type": "string" },
+                    "folder_id": { "type": "string" }
+                },
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": false, "openWorldHint": false }
+        }),
+        json!({
             "name": "set_environment_variable",
             "description": "Create or update a variable in an environment. Secret values are stored in the OS credential store and are never written to environment files.",
             "inputSchema": {
@@ -603,11 +740,12 @@ pub fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "assign_request_to_environment",
-            "description": "Move an open request's saved snapshot into an existing persistent environment. History is not changed.",
+            "description": "Move an open request's saved snapshot into an environment root or one of its folders. History is not changed.",
             "inputSchema": {
                 "type": "object", "required": ["environment_id", "request_id"],
                 "properties": {
                     "environment_id": { "type": "string" },
+                    "folder_id": { "type": "string", "description": "Optional folder ID. Omit to place the request at the environment root." },
                     "request_id": { "type": "string" }
                 },
                 "additionalProperties": false
@@ -804,6 +942,7 @@ mod tests {
             &mut environments,
             EnvironmentAgentCommand::AssignRequest {
                 environment_id,
+                folder_id: None,
                 request_id,
             },
         );
@@ -851,6 +990,132 @@ mod tests {
             environments.environments[0].variables[0].value.as_deref(),
             Some("https://api.stag.compile.sh")
         );
+    }
+
+    #[test]
+    fn agent_can_manage_folders_and_place_requests() {
+        let workspace = Workspace::default();
+        let request_id = workspace.active_request_id.clone();
+        let mut environments = EnvironmentStore::default();
+        let environment_id = environments.create("Staging");
+
+        let created = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::CreateFolder {
+                environment_id: environment_id.clone(),
+                parent_folder_id: None,
+                name: "Authentication".into(),
+            },
+        );
+        assert!(created.ok);
+        let folder_id = created.data.unwrap()["folder_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let nested = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::CreateFolder {
+                environment_id: environment_id.clone(),
+                parent_folder_id: Some(folder_id.clone()),
+                name: "Login".into(),
+            },
+        );
+        assert!(nested.ok);
+        let nested_folder_id = nested.data.unwrap()["folder_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let other_root = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::CreateFolder {
+                environment_id: environment_id.clone(),
+                parent_folder_id: None,
+                name: "Backend".into(),
+            },
+        );
+        assert!(other_root.ok);
+        let other_root_id = other_root.data.unwrap()["folder_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let same_name_in_other_scope = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::CreateFolder {
+                environment_id: environment_id.clone(),
+                parent_folder_id: Some(other_root_id),
+                name: "Login".into(),
+            },
+        );
+        assert!(same_name_in_other_scope.ok);
+        let duplicate_sibling = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::CreateFolder {
+                environment_id: environment_id.clone(),
+                parent_folder_id: Some(folder_id.clone()),
+                name: "login".into(),
+            },
+        );
+        assert!(!duplicate_sibling.ok);
+
+        let assigned = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::AssignRequest {
+                environment_id: environment_id.clone(),
+                folder_id: Some(nested_folder_id.clone()),
+                request_id: request_id.clone(),
+            },
+        );
+        assert!(assigned.ok);
+        assert_eq!(
+            environments.folder_for_request(&request_id).unwrap().name,
+            "Login"
+        );
+
+        let renamed = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::RenameFolder {
+                environment_id: environment_id.clone(),
+                folder_id: nested_folder_id.clone(),
+                name: "Credentials".into(),
+            },
+        );
+        assert!(renamed.ok);
+        assert_eq!(
+            environments.environments[0].folders[0].folders[0].name,
+            "Credentials"
+        );
+
+        let deleted = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::DeleteFolder {
+                environment_id: environment_id.clone(),
+                folder_id: nested_folder_id,
+            },
+        );
+        assert!(deleted.ok);
+        assert_eq!(
+            environments.folder_for_request(&request_id).unwrap().id,
+            folder_id
+        );
+        let deleted_parent = apply_environment_agent_command(
+            &workspace,
+            &mut environments,
+            EnvironmentAgentCommand::DeleteFolder {
+                environment_id,
+                folder_id,
+            },
+        );
+        assert!(deleted_parent.ok);
+        assert!(environments.folder_for_request(&request_id).is_none());
+        assert!(environments.environment_for_request(&request_id).is_some());
     }
 
     #[test]
