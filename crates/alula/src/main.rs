@@ -5629,19 +5629,24 @@ impl AlulaApp {
             })
             .collect::<Vec<_>>();
         let content = if filtered_indices.is_empty() {
-            div().flex_1().min_h_0().child(empty_state(
-                if self.environments.environments.is_empty() {
-                    "No environments yet"
-                } else {
-                    "No matching environments"
-                },
-                if self.environments.environments.is_empty() {
-                    "Create one, then right-click a request tab to add it"
-                } else {
-                    "Try a different search"
-                },
-                cx,
-            ))
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(empty_state(
+                    if self.environments.environments.is_empty() {
+                        "No environments yet"
+                    } else {
+                        "No matching environments"
+                    },
+                    if self.environments.environments.is_empty() {
+                        "Create one, then right-click a request tab to add it"
+                    } else {
+                        "Try a different search"
+                    },
+                    cx,
+                ))
         } else {
             div().flex_1().min_h_0().p_3().child(
                 uniform_list(

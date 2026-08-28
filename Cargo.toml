@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/alula"]
-exclude = ["vendor/gpui-component"]
+exclude = ["vendor/gpui-component", "vendor/xim-ctext"]
 resolver = "3"
 
 [workspace.package]
@@ -10,6 +10,9 @@ version = "0.1.0"
 
 [patch.crates-io]
 gpui-component = { path = "vendor/gpui-component" }
+# zed-xim negotiates COMPOUND_TEXT on Linux. The published decoder rejects
+# valid unescaped Latin-1 input (for example 0xE9) and zed-xim then panics.
+xim-ctext = { path = "vendor/xim-ctext" }
 
 [profile.release]
 strip = "symbols"
