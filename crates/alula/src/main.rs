@@ -7377,6 +7377,7 @@ fn empty_state(title: &'static str, subtitle: &'static str, cx: &App) -> Div {
         .flex_col()
         .items_center()
         .justify_center()
+        .text_center()
         .gap_2()
         .child(
             div()
