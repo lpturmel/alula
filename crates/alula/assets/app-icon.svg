@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="Alula app icon">
+  <defs>
+    <linearGradient id="tile" x1="164" y1="112" x2="860" y2="920" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#151D31"/>
+      <stop offset="1" stop-color="#0B1020"/>
+    </linearGradient>
+    <linearGradient id="g1" gradientUnits="userSpaceOnUse" x1="115.19" y1="-70.32" x2="264.74" y2="151.39">
+      <stop offset="0.0000" stop-color="#0280f5"/>
+      <stop offset="0.1667" stop-color="#0a7af5"/>
+      <stop offset="0.3333" stop-color="#1876f7"/>
+      <stop offset="0.5000" stop-color="#2671f8"/>
+      <stop offset="0.6667" stop-color="#366af8"/>
+      <stop offset="0.8333" stop-color="#4463f8"/>
+      <stop offset="1.0000" stop-color="#4c5bf8"/>
+    </linearGradient>
+    <linearGradient id="g2" gradientUnits="userSpaceOnUse" x1="101.42" y1="52.12" x2="162.14" y2="149.28">
+      <stop offset="0.0000" stop-color="#409afb"/>
+      <stop offset="0.1667" stop-color="#4094fb"/>
+      <stop offset="0.3333" stop-color="#4791fb"/>
+      <stop offset="0.5000" stop-color="#4d8dfa"/>
+      <stop offset="0.6667" stop-color="#5188fa"/>
+      <stop offset="0.8333" stop-color="#5985fb"/>
+      <stop offset="1.0000" stop-color="#5d80fa"/>
+    </linearGradient>
+    <linearGradient id="g3" gradientUnits="userSpaceOnUse" x1="238.47" y1="102.19" x2="251.32" y2="125.37">
+      <stop offset="0.0000" stop-color="#4570fa"/>
+      <stop offset="0.1667" stop-color="#4d75f9"/>
+      <stop offset="0.3333" stop-color="#4f74f9"/>
+      <stop offset="0.5000" stop-color="#5073fa"/>
+      <stop offset="0.6667" stop-color="#5473fa"/>
+      <stop offset="0.8333" stop-color="#5572fa"/>
+      <stop offset="1.0000" stop-color="#5a76fc"/>
+    </linearGradient>
+    <linearGradient id="g4" gradientUnits="userSpaceOnUse" x1="286.98" y1="115.92" x2="386.98" y2="239.40">
+      <stop offset="0.0000" stop-color="#5060f7"/>
+      <stop offset="0.1667" stop-color="#5459f8"/>
+      <stop offset="0.3333" stop-color="#5a52f8"/>
+      <stop offset="0.5000" stop-color="#604cf9"/>
+      <stop offset="0.6667" stop-color="#6747fa"/>
+      <stop offset="0.8333" stop-color="#6d44fc"/>
+      <stop offset="1.0000" stop-color="#6a3dfc"/>
+    </linearGradient>
+    <linearGradient id="g5" gradientUnits="userSpaceOnUse" x1="151.40" y1="132.41" x2="215.31" y2="223.69">
+      <stop offset="0.0000" stop-color="#7d6efb"/>
+      <stop offset="0.1667" stop-color="#7d69fa"/>
+      <stop offset="0.3333" stop-color="#8263fb"/>
+      <stop offset="0.5000" stop-color="#8760fb"/>
+      <stop offset="0.6667" stop-color="#885afc"/>
+      <stop offset="0.8333" stop-color="#8755fc"/>
+      <stop offset="1.0000" stop-color="#8150fc"/>
+    </linearGradient>
+  </defs>
+  <rect x="72" y="72" width="880" height="880" rx="220" fill="url(#tile)"/>
+  <g transform="translate(121 293.5) scale(1.9)" shape-rendering="geometricPrecision">
+    <path class="alula-wing alula-wing-upper" d="M 338.02,106.00 L 337.00,106.34 L 276.00,106.43 L 275.48,106.00 L 274.16,102.00 L 272.28,98.00 L 270.39,95.00 L 267.00,91.31 L 264.00,88.62 L 261.00,86.46 L 258.00,84.73 L 255.00,83.54 L 252.00,82.65 L 246.00,81.79 L 242.00,81.84 L 237.00,82.64 L 234.00,83.59 L 232.00,84.55 L 231.00,84.00 L 228.17,79.00 L 222.62,70.00 L 221.00,67.00 L 218.24,63.00 L 214.64,59.00 L 211.00,55.64 L 207.00,52.69 L 205.00,51.46 L 199.00,48.57 L 193.00,46.71 L 188.00,45.90 L 183.00,45.62 L 53.00,45.70 L 47.00,45.15 L 42.00,44.17 L 36.00,42.29 L 33.03,41.00 L 28.00,38.32 L 25.00,36.33 L 20.00,32.44 L 14.52,27.00 L 10.80,22.00 L 7.60,17.00 L 6.56,15.00 L 3.38,8.00 L 2.50,5.00 L 2.69,4.00 L 4.00,2.65 L 10.00,2.46 L 246.00,2.50 L 252.00,3.00 L 261.00,4.98 L 266.00,6.73 L 270.00,8.63 L 278.00,13.65 L 282.00,16.85 L 285.00,19.69 L 288.05,23.00 L 291.30,27.00 L 295.37,33.00 L 297.56,37.00 L 305.37,50.00 L 305.77,51.00 L 308.64,56.00 L 312.44,62.00 L 324.57,83.00 L 334.27,99.00 Z" fill="url(#g1)"/>
+    <path class="alula-wing alula-wing-middle" d="M 212.12,119.00 L 211.42,120.00 L 210.00,121.24 L 208.00,122.09 L 196.00,122.24 L 98.00,122.22 L 94.00,121.96 L 88.00,121.14 L 84.00,120.12 L 83.00,119.60 L 79.00,118.19 L 75.00,116.15 L 69.00,112.22 L 64.20,108.00 L 59.72,103.00 L 57.52,100.00 L 55.65,97.00 L 55.26,96.00 L 51.92,90.00 L 50.60,87.00 L 50.35,85.00 L 50.42,84.00 L 50.67,83.00 L 52.00,81.58 L 54.00,80.78 L 176.00,80.71 L 180.00,80.81 L 185.00,81.63 L 188.00,82.61 L 190.00,83.55 L 192.00,84.81 L 194.47,87.00 L 196.14,89.00 L 202.43,100.00 L 206.30,106.00 L 211.00,114.23 L 212.22,117.00 L 212.31,118.00 Z" fill="url(#g2)"/>
+    <path class="alula-center-dot" d="M 248.00,128.08 L 245.00,128.46 L 243.00,128.35 L 239.00,127.12 L 237.00,126.06 L 234.51,124.00 L 232.86,122.00 L 231.64,120.00 L 230.62,117.00 L 230.46,114.00 L 230.68,111.00 L 231.61,108.00 L 232.62,106.00 L 234.00,104.13 L 236.17,102.00 L 238.00,100.70 L 241.00,99.60 L 244.00,99.18 L 247.00,99.36 L 249.00,99.69 L 252.00,100.92 L 254.92,103.00 L 257.00,105.32 L 258.01,107.00 L 259.15,110.00 L 259.44,114.00 L 259.16,117.00 L 258.25,120.00 L 257.14,122.00 L 256.00,123.46 L 254.00,125.29 L 251.00,127.00 Z" fill="url(#g3)"/>
+    <path class="alula-wing alula-wing-trailing" d="M 407.66,225.00 L 407.00,225.62 L 406.00,225.71 L 370.00,225.61 L 365.00,225.36 L 359.00,224.70 L 351.00,223.46 L 345.00,222.12 L 339.00,220.49 L 333.00,218.41 L 326.00,215.42 L 322.00,213.35 L 317.00,210.26 L 309.00,204.51 L 303.00,199.29 L 297.00,193.15 L 292.60,188.00 L 289.62,184.00 L 287.70,181.00 L 287.27,180.00 L 280.66,169.00 L 280.24,168.00 L 273.63,157.00 L 270.33,151.00 L 266.66,145.00 L 264.04,140.00 L 264.15,139.00 L 266.00,137.52 L 268.44,135.00 L 272.03,130.00 L 273.25,128.00 L 275.64,122.00 L 276.00,121.72 L 324.00,121.79 L 333.00,121.65 L 347.00,121.77 L 348.27,123.00 L 353.96,133.00 L 373.36,166.00 L 377.86,174.00 L 391.43,197.00 L 398.12,208.00 L 400.86,213.00 L 406.42,222.00 L 407.52,224.00 Z" fill="url(#g4)"/>
+    <path class="alula-wing alula-wing-lower" d="M 255.48,196.00 L 255.00,197.24 L 254.00,198.32 L 252.00,199.34 L 249.00,199.51 L 158.00,199.46 L 153.00,199.12 L 148.00,198.42 L 144.00,197.47 L 141.00,196.45 L 138.00,195.13 L 134.00,193.08 L 128.00,189.29 L 124.22,186.00 L 120.00,181.45 L 116.78,177.00 L 111.96,169.00 L 109.81,164.00 L 109.64,162.00 L 109.82,161.00 L 111.21,159.00 L 113.00,157.95 L 114.00,157.80 L 124.00,157.63 L 222.00,157.66 L 227.26,158.00 L 233.00,159.83 L 236.50,162.00 L 238.41,164.00 L 245.06,175.00 L 249.49,183.00 L 255.03,192.00 L 255.65,194.00 Z" fill="url(#g5)"/>
+  </g>
+</svg>

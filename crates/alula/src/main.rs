@@ -90,6 +90,8 @@ struct Assets;
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
+            "icons/alula-mark.svg" => Some(include_bytes!("../assets/icons/alula-mark.svg")),
+            "icons/arrow-left.svg" => Some(include_bytes!("../assets/icons/arrow-left.svg")),
             "icons/arrow-right.svg" => Some(include_bytes!("../assets/icons/arrow-right.svg")),
             "icons/bot.svg" => Some(include_bytes!("../assets/icons/bot.svg")),
             "icons/check.svg" => Some(include_bytes!("../assets/icons/check.svg")),
@@ -101,10 +103,14 @@ impl AssetSource for Assets {
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             "icons/palette.svg" => Some(include_bytes!("../assets/icons/palette.svg")),
             "icons/redo-2.svg" => Some(include_bytes!("../assets/icons/redo-2.svg")),
+            "icons/search.svg" => Some(include_bytes!("../assets/icons/search.svg")),
             "icons/settings.svg" => Some(include_bytes!("../assets/icons/settings.svg")),
             "icons/settings-2.svg" => Some(include_bytes!("../assets/icons/settings-2.svg")),
             "icons/square-terminal.svg" => {
                 Some(include_bytes!("../assets/icons/square-terminal.svg"))
+            }
+            "icons/triangle-alert.svg" => {
+                Some(include_bytes!("../assets/icons/triangle-alert.svg"))
             }
             _ => None,
         };
@@ -116,6 +122,8 @@ impl AssetSource for Assets {
             return Ok(Vec::new());
         }
         Ok([
+            "alula-mark.svg",
+            "arrow-left.svg",
             "arrow-right.svg",
             "bot.svg",
             "check.svg",
@@ -127,9 +135,11 @@ impl AssetSource for Assets {
             "plus.svg",
             "palette.svg",
             "redo-2.svg",
+            "search.svg",
             "settings.svg",
             "settings-2.svg",
             "square-terminal.svg",
+            "triangle-alert.svg",
         ]
         .into_iter()
         .map(SharedString::from)
@@ -184,6 +194,13 @@ enum ResponseViewMode {
     Raw,
     Headers,
     Messages,
+}
+
+struct ResponseSwitchSegment {
+    id: &'static str,
+    label: &'static str,
+    width: Pixels,
+    mode: ResponseViewMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,12 +314,28 @@ fn next_palette_index(selected: usize, count: usize) -> Option<usize> {
     (count > 0).then(|| (selected + 1) % count)
 }
 
+fn active_tab_index_after_close(active: usize, closing: usize, tab_count: usize) -> usize {
+    debug_assert!(tab_count > 1);
+    debug_assert!(active < tab_count);
+    debug_assert!(closing < tab_count);
+
+    if closing < active {
+        active - 1
+    } else if closing == active {
+        active.min(tab_count - 2)
+    } else {
+        active
+    }
+}
+
 #[cfg(test)]
 mod command_palette_tests {
     use super::{
-        HttpStreamEvent, PaletteCommand, RequestStreamEvent, Rope, formatting_stream_chunk,
-        next_palette_index, open_variable_at_cursor, open_variable_at_rope_cursor,
-        previous_palette_index, push_stream_event_batch, redact_secret_values,
+        HttpStreamEvent, PaletteCommand, RequestStreamEvent, Rope, active_tab_index_after_close,
+        ascii_contains_ignore_case, formatting_stream_chunk, next_palette_index,
+        open_variable_at_cursor, open_variable_at_rope_cursor, previous_palette_index,
+        push_stream_event_batch, redact_secret_values, split_history_error, template_visual_state,
+        variable_completion_context_at_cursor, variable_completion_insert_text,
     };
 
     #[test]
@@ -320,6 +353,14 @@ mod command_palette_tests {
     }
 
     #[test]
+    fn large_list_filtering_matches_ascii_without_allocating_lowercase_rows() {
+        assert!(ascii_contains_ignore_case("Production_API_URL", "api"));
+        assert!(ascii_contains_ignore_case("POST", "post"));
+        assert!(ascii_contains_ignore_case("anything", ""));
+        assert!(!ascii_contains_ignore_case("staging", "prod"));
+    }
+
+    #[test]
     fn arrow_navigation_wraps_and_handles_empty_results() {
         assert_eq!(next_palette_index(0, 4), Some(1));
         assert_eq!(next_palette_index(3, 4), Some(0));
@@ -327,6 +368,15 @@ mod command_palette_tests {
         assert_eq!(previous_palette_index(2, 4), Some(1));
         assert_eq!(next_palette_index(0, 0), None);
         assert_eq!(previous_palette_index(0, 0), None);
+    }
+
+    #[test]
+    fn closing_tabs_preserves_the_active_request_when_possible() {
+        assert_eq!(active_tab_index_after_close(2, 0, 4), 1);
+        assert_eq!(active_tab_index_after_close(2, 3, 4), 2);
+        assert_eq!(active_tab_index_after_close(2, 2, 4), 2);
+        assert_eq!(active_tab_index_after_close(3, 3, 4), 2);
+        assert_eq!(active_tab_index_after_close(0, 0, 4), 0);
     }
 
     #[test]
@@ -381,6 +431,32 @@ mod command_palette_tests {
     }
 
     #[test]
+    fn variable_completion_preserves_an_existing_closing_delimiter() {
+        let context = variable_completion_context_at_cursor("{{ba}}", 4).unwrap();
+        assert_eq!(context.start, 0);
+        assert_eq!(context.partial, "ba");
+        assert!(context.has_closing_delimiter);
+
+        let context = variable_completion_context_at_cursor("{{ba", 4).unwrap();
+        assert!(!context.has_closing_delimiter);
+
+        assert_eq!(variable_completion_insert_text("base", true), "{{base");
+        assert_eq!(variable_completion_insert_text("base", false), "{{base}}");
+    }
+
+    #[test]
+    fn template_visual_state_tracks_only_variable_spans() {
+        let mut environment = alula::Environment::new("test");
+        environment
+            .variables
+            .push(alula::EnvironmentVariable::public("base", "example.com"));
+        let source = "https://{{base}}/users";
+        let state = template_visual_state(source, Some(&environment));
+        assert_eq!(state.references, vec![8..16]);
+        assert!(state.error.is_none());
+    }
+
+    #[test]
     fn secret_values_are_removed_from_transport_errors() {
         assert_eq!(
             redact_secret_values(
@@ -388,6 +464,21 @@ mod command_palette_tests {
                 &["s3cr3t".into()],
             ),
             "failed to request https://example.com?token=••••••"
+        );
+    }
+
+    #[test]
+    fn history_http_errors_are_split_into_status_and_detail() {
+        assert_eq!(
+            split_history_error("WebSocket handshake failed: HTTP error: 401 Unauthorized",),
+            (
+                "401 Unauthorized".into(),
+                Some("WebSocket handshake failed".into()),
+            )
+        );
+        assert_eq!(
+            split_history_error("connection refused"),
+            ("connection refused".into(), None),
         );
     }
 }
@@ -441,7 +532,8 @@ impl PairInputs {
         let key = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
                 .placeholder("Key")
-                .default_value(key_value);
+                .default_value(key_value)
+                .text_highlights(key_template_state.borrow().text_highlights(cx));
             state.lsp.completion_provider =
                 Some(Rc::new(VariableCompletionProvider::new(key_names)));
             state
@@ -450,7 +542,8 @@ impl PairInputs {
         let value = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
                 .placeholder("Value")
-                .default_value(value_value);
+                .default_value(value_value)
+                .text_highlights(value_template_state.borrow().text_highlights(cx));
             state.lsp.completion_provider =
                 Some(Rc::new(VariableCompletionProvider::new(value_names)));
             state
@@ -466,7 +559,12 @@ impl PairInputs {
                 }
                 let value = input.read(cx).value();
                 let environment = this.environments.environment_for_request(&request_id);
-                *visual_state.borrow_mut() = template_visual_state(value.as_ref(), environment);
+                let next_visual_state = template_visual_state(value.as_ref(), environment);
+                let highlights = next_visual_state.text_highlights(cx);
+                input.update(cx, |input, cx| {
+                    input.set_text_highlights(highlights, cx);
+                });
+                *visual_state.borrow_mut() = next_visual_state;
                 this.persistence_dirty.store(true, Ordering::Release);
                 cx.notify();
             })
@@ -497,11 +595,20 @@ impl PairInputs {
         )
     }
 
-    fn refresh_template_state(&self, environment: Option<&alula::Environment>, cx: &App) {
-        *self.key_template_state.borrow_mut() =
-            template_visual_state(self.key.read(cx).value().as_ref(), environment);
-        *self.value_template_state.borrow_mut() =
-            template_visual_state(self.value.read(cx).value().as_ref(), environment);
+    fn refresh_template_state(&self, environment: Option<&alula::Environment>, cx: &mut App) {
+        let key_state = template_visual_state(self.key.read(cx).value().as_ref(), environment);
+        let key_highlights = key_state.text_highlights(cx);
+        self.key.update(cx, |input, cx| {
+            input.set_text_highlights(key_highlights, cx);
+        });
+        *self.key_template_state.borrow_mut() = key_state;
+
+        let value_state = template_visual_state(self.value.read(cx).value().as_ref(), environment);
+        let value_highlights = value_state.text_highlights(cx);
+        self.value.update(cx, |input, cx| {
+            input.set_text_highlights(value_highlights, cx);
+        });
+        *self.value_template_state.borrow_mut() = value_state;
     }
 
     fn to_field(&self, cx: &App) -> KeyValueField {
@@ -638,11 +745,15 @@ struct RequestTab {
 #[derive(Clone)]
 struct VariableCompletionProvider {
     variable_names: Rc<RefCell<Vec<(String, bool)>>>,
+    active: Cell<bool>,
 }
 
 impl VariableCompletionProvider {
     fn new(variable_names: Rc<RefCell<Vec<(String, bool)>>>) -> Self {
-        Self { variable_names }
+        Self {
+            variable_names,
+            active: Cell::new(false),
+        }
     }
 }
 
@@ -655,19 +766,27 @@ impl CompletionProvider for VariableCompletionProvider {
         _: &mut Window,
         _: &mut Context<InputState>,
     ) -> Task<anyhow::Result<CompletionResponse>> {
-        let Some(start) = open_variable_at_rope_cursor(text, offset) else {
+        const MAX_VISIBLE_COMPLETIONS: usize = 100;
+
+        let Some(context) = variable_completion_context_at_rope_cursor(text, offset) else {
+            self.active.set(false);
             return Task::ready(Ok(CompletionResponse::Array(Vec::new())));
         };
+        self.active.set(true);
         let range = LspRange {
-            start: text.offset_to_position(start),
+            start: text.offset_to_position(context.start),
             end: text.offset_to_position(offset),
         };
-        let items = self
-            .variable_names
-            .borrow()
+        let variable_names = self.variable_names.borrow();
+        let first_match =
+            variable_names.partition_point(|(name, _)| name.as_str() < context.partial.as_str());
+        let items = variable_names[first_match..]
             .iter()
+            .take_while(|(name, _)| name.starts_with(&context.partial))
+            .take(MAX_VISIBLE_COMPLETIONS)
             .map(|(name, secret)| {
                 let syntax = format!("{{{{{name}}}}}");
+                let new_text = variable_completion_insert_text(name, context.has_closing_delimiter);
                 CompletionItem {
                     label: syntax.clone(),
                     detail: Some(if *secret {
@@ -676,10 +795,7 @@ impl CompletionProvider for VariableCompletionProvider {
                         "Environment variable".into()
                     }),
                     kind: Some(CompletionItemKind::VARIABLE),
-                    text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                        range,
-                        new_text: syntax,
-                    })),
+                    text_edit: Some(CompletionTextEdit::Edit(TextEdit { range, new_text })),
                     ..Default::default()
                 }
             })
@@ -688,25 +804,46 @@ impl CompletionProvider for VariableCompletionProvider {
     }
 
     fn is_completion_trigger(&self, _: usize, new_text: &str, _: &mut Context<InputState>) -> bool {
-        new_text.is_empty()
-            || new_text.chars().all(|character| {
-                character == '{'
-                    || character == '_'
-                    || character == '-'
-                    || character == '.'
-                    || character.is_ascii_alphanumeric()
-            })
+        new_text.contains('{')
+            || (self.active.get()
+                && (new_text.is_empty()
+                    || new_text.chars().all(|character| {
+                        character == '{'
+                            || character == '}'
+                            || character == '_'
+                            || character == '-'
+                            || character == '.'
+                            || character.is_ascii_alphanumeric()
+                    })))
     }
 }
 
-fn open_variable_at_cursor(source: &str, offset: usize) -> Option<usize> {
+fn variable_completion_insert_text(name: &str, has_closing_delimiter: bool) -> String {
+    if has_closing_delimiter {
+        format!("{{{{{name}")
+    } else {
+        format!("{{{{{name}}}}}")
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct VariableCompletionContext {
+    start: usize,
+    partial: String,
+    has_closing_delimiter: bool,
+}
+
+fn variable_completion_context_at_cursor(
+    source: &str,
+    offset: usize,
+) -> Option<VariableCompletionContext> {
     let before = source.get(..offset)?;
     let start = before.rfind("{{")?;
     if before[start + 2..].contains("}}") {
         return None;
     }
     let partial = &before[start + 2..];
-    (partial.is_empty()
+    let valid_partial = partial.is_empty()
         || partial.chars().enumerate().all(|(index, character)| {
             if index == 0 {
                 character == '_' || character.is_ascii_alphabetic()
@@ -716,11 +853,23 @@ fn open_variable_at_cursor(source: &str, offset: usize) -> Option<usize> {
                     || character == '.'
                     || character.is_ascii_alphanumeric()
             }
-        }))
-    .then_some(start)
+        });
+    valid_partial.then(|| VariableCompletionContext {
+        start,
+        partial: partial.to_owned(),
+        has_closing_delimiter: source[offset..].starts_with("}}"),
+    })
 }
 
-fn open_variable_at_rope_cursor(text: &Rope, offset: usize) -> Option<usize> {
+#[cfg(test)]
+fn open_variable_at_cursor(source: &str, offset: usize) -> Option<usize> {
+    variable_completion_context_at_cursor(source, offset).map(|context| context.start)
+}
+
+fn variable_completion_context_at_rope_cursor(
+    text: &Rope,
+    offset: usize,
+) -> Option<VariableCompletionContext> {
     const MAX_COMPLETION_PREFIX_CHARS: usize = 128;
 
     let reversed = text
@@ -729,15 +878,40 @@ fn open_variable_at_rope_cursor(text: &Rope, offset: usize) -> Option<usize> {
         .take(MAX_COMPLETION_PREFIX_CHARS)
         .collect::<String>();
     let suffix = reversed.chars().rev().collect::<String>();
-    let local_start = open_variable_at_cursor(&suffix, suffix.len())?;
-    Some(offset - (suffix.len() - local_start))
+    let mut context = variable_completion_context_at_cursor(&suffix, suffix.len())?;
+    context.start = offset - (suffix.len() - context.start);
+    context.has_closing_delimiter =
+        text.char_at(offset) == Some('}') && text.char_at(offset + 1) == Some('}');
+    Some(context)
 }
 
-#[derive(Clone)]
-enum TemplateVisualState {
-    Plain,
-    Valid,
-    Error(String),
+#[cfg(test)]
+fn open_variable_at_rope_cursor(text: &Rope, offset: usize) -> Option<usize> {
+    variable_completion_context_at_rope_cursor(text, offset).map(|context| context.start)
+}
+
+#[derive(Clone, Default)]
+struct TemplateVisualState {
+    references: Vec<std::ops::Range<usize>>,
+    error: Option<String>,
+}
+
+impl TemplateVisualState {
+    fn is_valid(&self) -> bool {
+        !self.references.is_empty() && self.error.is_none()
+    }
+
+    fn text_highlights(&self, cx: &App) -> Vec<(std::ops::Range<usize>, HighlightStyle)> {
+        let style = HighlightStyle {
+            color: Some(cx.theme().primary),
+            ..Default::default()
+        };
+        self.references
+            .iter()
+            .cloned()
+            .map(|range| (range, style))
+            .collect()
+    }
 }
 
 fn template_visual_state(
@@ -745,12 +919,9 @@ fn template_visual_state(
     environment: Option<&alula::Environment>,
 ) -> TemplateVisualState {
     let inspection = inspect_template(source, environment);
-    if let Some(error) = inspection.errors.first() {
-        TemplateVisualState::Error(error.to_string())
-    } else if inspection.is_valid_reference() {
-        TemplateVisualState::Valid
-    } else {
-        TemplateVisualState::Plain
+    TemplateVisualState {
+        references: inspection.references,
+        error: inspection.errors.first().map(ToString::to_string),
     }
 }
 
@@ -930,7 +1101,8 @@ impl RequestTab {
         let url = cx.new(|cx| {
             let mut state = InputState::new(window, cx)
                 .placeholder("https://api.example.com/v1/resource")
-                .default_value(url_value);
+                .default_value(url_value)
+                .text_highlights(url_template_state.text_highlights(cx));
             state.lsp.completion_provider =
                 Some(Rc::new(VariableCompletionProvider::new(url_names)));
             state
@@ -943,7 +1115,10 @@ impl RequestTab {
             } else {
                 state.multi_line(true)
             };
-            state = state.soft_wrap(false).default_value(body_value);
+            state = state
+                .soft_wrap(false)
+                .default_value(body_value)
+                .text_highlights(body_template_state.text_highlights(cx));
             state.lsp.completion_provider =
                 Some(Rc::new(VariableCompletionProvider::new(body_names)));
             state
@@ -956,6 +1131,10 @@ impl RequestTab {
             let value = input.read(cx).value();
             let environment = this.environments.environment_for_request(&url_request_id);
             let state = template_visual_state(value.as_ref(), environment);
+            let highlights = state.text_highlights(cx);
+            input.update(cx, |input, cx| {
+                input.set_text_highlights(highlights, cx);
+            });
             if let Some(tab) = this
                 .tabs
                 .iter_mut()
@@ -975,6 +1154,10 @@ impl RequestTab {
             let value = input.read(cx).value();
             let environment = this.environments.environment_for_request(&body_request_id);
             let state = template_visual_state(value.as_ref(), environment);
+            let highlights = state.text_highlights(cx);
+            input.update(cx, |input, cx| {
+                input.set_text_highlights(highlights, cx);
+            });
             if let Some(tab) = this
                 .tabs
                 .iter_mut()
@@ -1020,13 +1203,15 @@ impl RequestTab {
     }
 
     fn set_environment_variables(&self, variables: &[EnvironmentVariable]) {
-        *self.variable_names.borrow_mut() = variables
+        let mut names = variables
             .iter()
             .map(|variable| (variable.name.clone(), variable.secret))
-            .collect();
+            .collect::<Vec<_>>();
+        names.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        *self.variable_names.borrow_mut() = names;
     }
 
-    fn refresh_environment(&mut self, environment: Option<&alula::Environment>, cx: &App) {
+    fn refresh_environment(&mut self, environment: Option<&alula::Environment>, cx: &mut App) {
         self.set_environment_variables(
             environment
                 .map(|environment| environment.variables.as_slice())
@@ -1034,8 +1219,16 @@ impl RequestTab {
         );
         self.url_template_state =
             template_visual_state(self.url.read(cx).value().as_ref(), environment);
+        let url_highlights = self.url_template_state.text_highlights(cx);
+        self.url.update(cx, |input, cx| {
+            input.set_text_highlights(url_highlights, cx);
+        });
         self.body_template_state =
             template_visual_state(self.body.read(cx).value().as_ref(), environment);
+        let body_highlights = self.body_template_state.text_highlights(cx);
+        self.body.update(cx, |input, cx| {
+            input.set_text_highlights(body_highlights, cx);
+        });
         for pair in self.parameters.iter().chain(&self.headers) {
             pair.refresh_template_state(environment, cx);
         }
@@ -1081,12 +1274,16 @@ impl RequestTab {
     }
 }
 
+type SidebarNavClick = Box<dyn Fn(&mut Window, &mut App)>;
+
 struct AlulaApp {
     focus_handle: FocusHandle,
     new_request_focus: FocusHandle,
     sidebar_collapsed: bool,
     sidebar_hovered: Option<WorkspaceSection>,
+    sidebar_pressed: Option<WorkspaceSection>,
     new_request_hovered: bool,
+    new_request_pressed: bool,
     command_hovered: bool,
     send_hovered: bool,
     copy_feedback_active: bool,
@@ -1104,10 +1301,16 @@ struct AlulaApp {
     persistence_dirty: Arc<AtomicBool>,
     environment_name: Entity<InputState>,
     environment_search: Entity<InputState>,
+    history_search: Entity<InputState>,
     environment_request_search: Entity<InputState>,
     environment_variable_search: Entity<InputState>,
     selected_environment_id: Option<String>,
     environment_detail_tab: EnvironmentDetailTab,
+    hovered_environment_id: Option<String>,
+    hovered_environment_request_id: Option<String>,
+    hovered_environment_variable_id: Option<String>,
+    hovered_history_id: Option<String>,
+    revealed_secret_variable_id: Option<String>,
     mcp_http: Option<McpHttpServer>,
     mcp_status: McpStatus,
     mcp_ui_tx: smol::channel::Sender<McpUiCall>,
@@ -1129,6 +1332,7 @@ struct McpUiCall {
 #[derive(Clone)]
 enum McpStatus {
     Ready { port: u16 },
+    Stopped,
     Error(SharedString),
 }
 
@@ -1352,7 +1556,7 @@ impl Render for CommandPaletteView {
                 "command-palette-enter",
                 Animation::new(Duration::from_secs_f64(0.18))
                     .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
-                |this, delta| this.opacity(delta).top(px(-7.) * (1.0 - delta)),
+                |this, delta| this.opacity(delta),
             )
     }
 }
@@ -1368,38 +1572,50 @@ impl AlulaApp {
         let theme_modified = fs::metadata(&theme_path)
             .and_then(|value| value.modified())
             .ok();
-        let active_tab = persisted
-            .workspace
+        let PersistedState {
+            workspace,
+            history,
+            environments,
+        } = persisted;
+        let workspace = if theme_config.application.restore_open_requests {
+            workspace
+        } else {
+            Workspace::default()
+        };
+        let active_tab = workspace
             .requests
             .iter()
-            .position(|request| request.id == persisted.workspace.active_request_id)
+            .position(|request| request.id == workspace.active_request_id)
             .unwrap_or(0);
-        let mut tabs: Vec<_> = persisted
-            .workspace
+        let mut tabs: Vec<_> = workspace
             .requests
             .into_iter()
             .map(|request| RequestTab::new(request, window, cx))
             .collect();
         for tab in &mut tabs {
-            let environment = persisted
-                .environments
-                .environment_for_request(&tab.draft.id);
+            let environment = environments.environment_for_request(&tab.draft.id);
             tab.refresh_environment(environment, cx);
         }
         let focus_handle = cx.focus_handle();
         let new_request_focus = cx.focus_handle();
         focus_handle.focus(window);
         let (mcp_ui_tx, mcp_ui_rx) = smol::channel::unbounded();
-        let (mcp_http, mcp_status) =
-            Self::launch_mcp_http(theme_config.agent.port, &theme_path, mcp_ui_tx.clone());
+        let (mcp_http, mcp_status) = if theme_config.agent.start_with_app {
+            Self::launch_mcp_http(theme_config.agent.port, &theme_path, mcp_ui_tx.clone())
+        } else {
+            (None, McpStatus::Stopped)
+        };
         let environment_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search environments…"));
+        let history_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Filter history…"));
         let environment_request_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search requests…"));
         let environment_variable_search =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search variables…"));
         for input in [
             &environment_search,
+            &history_search,
             &environment_request_search,
             &environment_variable_search,
         ] {
@@ -1415,7 +1631,9 @@ impl AlulaApp {
             new_request_focus,
             sidebar_collapsed: false,
             sidebar_hovered: None,
+            sidebar_pressed: None,
             new_request_hovered: false,
+            new_request_pressed: false,
             command_hovered: false,
             send_hovered: false,
             copy_feedback_active: false,
@@ -1428,16 +1646,22 @@ impl AlulaApp {
             theme_path,
             theme_modified,
             workspace_section: WorkspaceSection::Requests,
-            environments: persisted.environments,
-            history: persisted.history,
+            environments,
+            history,
             persistence_dirty: Arc::new(AtomicBool::new(false)),
             environment_name: cx
                 .new(|cx| InputState::new(window, cx).placeholder("Production, Staging, Local…")),
             environment_search,
+            history_search,
             environment_request_search,
             environment_variable_search,
             selected_environment_id: None,
             environment_detail_tab: EnvironmentDetailTab::Requests,
+            hovered_environment_id: None,
+            hovered_environment_request_id: None,
+            hovered_environment_variable_id: None,
+            hovered_history_id: None,
+            revealed_secret_variable_id: None,
             mcp_http,
             mcp_status,
             mcp_ui_tx,
@@ -1550,6 +1774,10 @@ impl AlulaApp {
 
     fn restart_mcp_http(&mut self) {
         self.mcp_http.take();
+        if !self.theme_config.agent.start_with_app {
+            self.mcp_status = McpStatus::Stopped;
+            return;
+        }
         let (server, status) = Self::launch_mcp_http(
             self.theme_config.agent.port,
             &self.theme_path,
@@ -2067,7 +2295,7 @@ impl AlulaApp {
         let save = settings.clone();
         let restore = settings.clone();
         let app = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, _cx| {
             dialog
                 .title(Label::new("Settings").font_weight(FontWeight::SEMIBOLD))
                 .w(viewport.width)
@@ -2080,10 +2308,12 @@ impl AlulaApp {
                 .overlay(false)
                 .child(settings.clone())
                 .confirm()
+                .close_button(true)
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text("Save settings")
-                        .cancel_text("Cancel"),
+                        .cancel_text("Cancel")
+                        .cancel_variant(ButtonVariant::Secondary),
                 )
                 .on_ok({
                     let save = save.clone();
@@ -2351,15 +2581,28 @@ impl AlulaApp {
         cx.notify();
     }
 
+    fn add_environment_request(
+        &mut self,
+        environment_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.add_request(&ClickEvent::default(), window, cx);
+        let request_id = self.tabs[self.active_tab].draft.id.clone();
+        self.assign_request_to_environment(&request_id, environment_id, cx);
+    }
+
     fn close_request(&mut self, index: usize, cx: &mut Context<Self>) {
-        if self.tabs.len() == 1 {
+        if self.tabs.len() == 1 || index >= self.tabs.len() {
             return;
         }
+        let next_active = active_tab_index_after_close(self.active_tab, index, self.tabs.len());
         if let Some(cancellation) = self.tabs[index].cancellation.take() {
             cancellation.store(true, Ordering::Release);
         }
         self.tabs.remove(index);
-        self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        self.active_tab = next_active;
+        self.request_tabs_scroll.scroll_to_item(self.active_tab);
         self.persistence_dirty.store(true, Ordering::Release);
         cx.notify();
     }
@@ -2395,7 +2638,6 @@ impl AlulaApp {
     }
 
     #[allow(dead_code)]
-
     fn open_environment_dialog(
         &mut self,
         _: &ClickEvent,
@@ -2408,10 +2650,12 @@ impl AlulaApp {
         let input = self.environment_name.clone();
         let save_input = input.clone();
         let app = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             dialog
                 .title(Label::new("New environment").font_weight(FontWeight::SEMIBOLD))
                 .w(px(440.))
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
                 .child(
                     div()
                         .flex()
@@ -2428,7 +2672,8 @@ impl AlulaApp {
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text("Create environment")
-                        .cancel_text("Cancel"),
+                        .cancel_text("Cancel")
+                        .cancel_variant(ButtonVariant::Secondary),
                 )
                 .on_ok({
                     let save_input = save_input.clone();
@@ -2477,12 +2722,33 @@ impl AlulaApp {
                         )))
                         .ghost()
                         .w_full()
-                        .label(format!(
-                            "{}  ·  {} request{}",
-                            environment.name,
-                            request_count,
-                            if request_count == 1 { "" } else { "s" }
-                        ))
+                        .h(px(42.))
+                        .px_3()
+                        .rounded(cx.theme().radius)
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .child(div().size(px(7.)).rounded_full().bg(cx.theme().primary))
+                                .child(
+                                    Label::new(environment.name.clone())
+                                        .font_weight(FontWeight::MEDIUM),
+                                )
+                                .child(
+                                    div()
+                                        .ml_auto()
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                        .text_size(px(10.))
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!(
+                                            "{} request{}",
+                                            request_count,
+                                            if request_count == 1 { "" } else { "s" }
+                                        )),
+                                ),
+                        )
                         .on_click(move |_, window, cx| {
                             window.close_dialog(cx);
                             row_app.update(cx, |this, cx| {
@@ -2500,6 +2766,8 @@ impl AlulaApp {
             dialog
                 .title(Label::new("Delete environment").font_weight(FontWeight::SEMIBOLD))
                 .w(px(480.))
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
                 .child(choices)
         });
     }
@@ -2511,14 +2779,20 @@ impl AlulaApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.theme_config.application.confirm_destructive_actions {
+            self.delete_environment_now(&environment_id, &environment_name, window, cx);
+            return;
+        }
         let app = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let delete_app = app.clone();
             let delete_id = environment_id.clone();
             let deleted_name = environment_name.clone();
             dialog
                 .title(Label::new("Delete environment?").font_weight(FontWeight::SEMIBOLD))
                 .w(px(480.))
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
                 .child(
                     Label::new(format!(
                         "“{environment_name}” and all of its saved requests, variables, and secrets will be permanently deleted."
@@ -2530,54 +2804,62 @@ impl AlulaApp {
                     DialogButtonProps::default()
                         .ok_text("Delete environment")
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text("Cancel"),
+                        .cancel_text("Cancel")
+                        .cancel_variant(ButtonVariant::Secondary),
                 )
                 .on_ok(move |_, window, cx| {
                     delete_app.update(cx, |this, cx| {
-                        let affected_request_ids = this
-                            .environments
-                            .environments
-                            .iter()
-                            .find(|environment| environment.id == delete_id)
-                            .map(|environment| {
-                                environment
-                                    .requests
-                                    .iter()
-                                    .map(|request| request.id.clone())
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        let workspace = this.workspace_snapshot(cx);
-                        let reply = apply_environment_agent_command(
-                            &workspace,
-                            &mut this.environments,
-                            EnvironmentAgentCommand::DeleteEnvironment {
-                                environment_id: delete_id.clone(),
-                            },
-                        );
-                        if reply.ok {
-                            if this.selected_environment_id.as_deref() == Some(delete_id.as_str()) {
-                                this.selected_environment_id = None;
-                            }
-                            for request_id in affected_request_ids {
-                                this.refresh_request_variable_names(&request_id, cx);
-                            }
-                            this.persistence_dirty.store(true, Ordering::Release);
-                            window.push_notification(
-                                Notification::success(format!(
-                                    "Deleted environment “{deleted_name}”"
-                                )),
-                                cx,
-                            );
-                            cx.notify();
-                            true
-                        } else {
-                            window.push_notification(Notification::error(reply.message), cx);
-                            false
-                        }
+                        this.delete_environment_now(&delete_id, &deleted_name, window, cx)
                     })
                 })
         });
+    }
+
+    fn delete_environment_now(
+        &mut self,
+        environment_id: &str,
+        environment_name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let affected_request_ids = self
+            .environments
+            .environments
+            .iter()
+            .find(|environment| environment.id == environment_id)
+            .map(|environment| {
+                environment
+                    .requests
+                    .iter()
+                    .map(|request| request.id.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let workspace = self.workspace_snapshot(cx);
+        let reply = apply_environment_agent_command(
+            &workspace,
+            &mut self.environments,
+            EnvironmentAgentCommand::DeleteEnvironment {
+                environment_id: environment_id.to_owned(),
+            },
+        );
+        if !reply.ok {
+            window.push_notification(Notification::error(reply.message), cx);
+            return false;
+        }
+        if self.selected_environment_id.as_deref() == Some(environment_id) {
+            self.selected_environment_id = None;
+        }
+        for request_id in affected_request_ids {
+            self.refresh_request_variable_names(&request_id, cx);
+        }
+        self.persistence_dirty.store(true, Ordering::Release);
+        window.push_notification(
+            Notification::success(format!("Deleted environment “{environment_name}”")),
+            cx,
+        );
+        cx.notify();
+        true
     }
 
     fn open_delete_history_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2607,12 +2889,29 @@ impl AlulaApp {
                         )))
                         .ghost()
                         .w_full()
-                        .label(format!(
-                            "{}  ·  {}  ·  {}",
-                            entry.request.method.as_str(),
-                            display_name,
-                            relative_history_time(entry.sent_at_unix_ms)
-                        ))
+                        .h(px(42.))
+                        .px_3()
+                        .rounded(cx.theme().radius)
+                        .child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap_3()
+                                .child(method_badge(entry.request.method, cx))
+                                .child(
+                                    Label::new(display_name.clone())
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_weight(FontWeight::MEDIUM),
+                                )
+                                .child(
+                                    Label::new(relative_history_time(entry.sent_at_unix_ms))
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground),
+                                ),
+                        )
                         .on_click(move |_, window, cx| {
                             window.close_dialog(cx);
                             row_app.update(cx, |this, cx| {
@@ -2630,6 +2929,8 @@ impl AlulaApp {
             dialog
                 .title(Label::new("Delete history entry").font_weight(FontWeight::SEMIBOLD))
                 .w(px(520.))
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
                 .child(choices)
         });
     }
@@ -2641,13 +2942,19 @@ impl AlulaApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.theme_config.application.confirm_destructive_actions {
+            self.delete_history_entry_now(&history_id, window, cx);
+            return;
+        }
         let app = cx.entity();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let delete_app = app.clone();
             let delete_id = history_id.clone();
             dialog
                 .title(Label::new("Delete history entry?").font_weight(FontWeight::SEMIBOLD))
                 .w(px(460.))
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
                 .child(
                     Label::new(format!(
                         "The recorded execution for “{display_name}” will be permanently deleted."
@@ -2659,31 +2966,37 @@ impl AlulaApp {
                     DialogButtonProps::default()
                         .ok_text("Delete history entry")
                         .ok_variant(ButtonVariant::Danger)
-                        .cancel_text("Cancel"),
+                        .cancel_text("Cancel")
+                        .cancel_variant(ButtonVariant::Secondary),
                 )
                 .on_ok(move |_, window, cx| {
                     delete_app.update(cx, |this, cx| {
-                        let reply = apply_history_agent_command(
-                            &mut this.history,
-                            HistoryAgentCommand::DeleteHistoryEntry {
-                                history_id: delete_id.clone(),
-                            },
-                        );
-                        if reply.ok {
-                            this.persistence_dirty.store(true, Ordering::Release);
-                            window.push_notification(
-                                Notification::success("History entry deleted"),
-                                cx,
-                            );
-                            cx.notify();
-                            true
-                        } else {
-                            window.push_notification(Notification::error(reply.message), cx);
-                            false
-                        }
+                        this.delete_history_entry_now(&delete_id, window, cx)
                     })
                 })
         });
+    }
+
+    fn delete_history_entry_now(
+        &mut self,
+        history_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let reply = apply_history_agent_command(
+            &mut self.history,
+            HistoryAgentCommand::DeleteHistoryEntry {
+                history_id: history_id.to_owned(),
+            },
+        );
+        if !reply.ok {
+            window.push_notification(Notification::error(reply.message), cx);
+            return false;
+        }
+        self.persistence_dirty.store(true, Ordering::Release);
+        window.push_notification(Notification::success("History entry deleted"), cx);
+        cx.notify();
+        true
     }
 
     fn open_environment_variable_dialog(
@@ -2745,6 +3058,8 @@ impl AlulaApp {
                         .font_weight(FontWeight::SEMIBOLD),
                 )
                 .w(px(480.))
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
                 .child(
                     div()
                         .flex()
@@ -2788,7 +3103,8 @@ impl AlulaApp {
                 .button_props(
                     DialogButtonProps::default()
                         .ok_text(if editing { "Save variable" } else { "Add variable" })
-                        .cancel_text("Cancel"),
+                        .cancel_text("Cancel")
+                        .cancel_variant(ButtonVariant::Secondary),
                 )
                 .on_ok({
                     let app = app.clone();
@@ -2939,7 +3255,7 @@ impl AlulaApp {
         }
     }
 
-    fn refresh_request_variable_names(&mut self, request_id: &str, cx: &App) {
+    fn refresh_request_variable_names(&mut self, request_id: &str, cx: &mut App) {
         let environment = self.environments.environment_for_request(request_id);
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.draft.id == request_id) {
             tab.refresh_environment(environment, cx);
@@ -3483,8 +3799,6 @@ impl AlulaApp {
         let collapsed = self.sidebar_collapsed;
         let command_hovered = self.command_hovered;
         let command_hover_app = cx.entity();
-        let command_hover_start = if command_hovered { px(0.) } else { px(-1.) };
-        let command_hover_target = if command_hovered { px(-1.) } else { px(0.) };
         let sidebar_target = if collapsed { px(0.) } else { px(224.) };
         let sidebar_start = if collapsed { px(224.) } else { px(0.) };
         let brand = div()
@@ -3511,9 +3825,12 @@ impl AlulaApp {
                             .justify_center()
                             .bg(cx.theme().primary)
                             .text_color(cx.theme().primary_foreground)
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child("A"),
+                            .child(
+                                svg()
+                                    .path("icons/alula-mark.svg")
+                                    .size(px(19.))
+                                    .text_color(cx.theme().primary_foreground),
+                            ),
                     )
                     .child(
                         Label::new("alula")
@@ -3563,6 +3880,26 @@ impl AlulaApp {
                         .opacity(0.88),
                 )
                 .child(format!("MCP :{port}")),
+            McpStatus::Stopped => div()
+                .h(px(27.))
+                .px_2()
+                .flex()
+                .items_center()
+                .gap_2()
+                .rounded_full()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().secondary)
+                .text_color(cx.theme().muted_foreground.opacity(0.68))
+                .font_family(cx.theme().mono_font_family.clone())
+                .text_size(px(10.))
+                .child(
+                    div()
+                        .size(px(6.))
+                        .rounded_full()
+                        .bg(cx.theme().muted_foreground.opacity(0.5)),
+                )
+                .child("MCP off"),
             McpStatus::Error(error) => div()
                 .h(px(27.))
                 .px_2()
@@ -3621,7 +3958,7 @@ impl AlulaApp {
                             WorkspaceSection::History => "History",
                         })
                         .text_xs()
-                        .font_weight(FontWeight::MEDIUM),
+                        .font_weight(FontWeight::BOLD),
                     ),
             )
             .child(
@@ -3672,10 +4009,11 @@ impl AlulaApp {
                                 Animation::new(Duration::from_secs_f64(0.12))
                                     .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                                 move |this, delta| {
-                                    this.top(
-                                        command_hover_start
-                                            + (command_hover_target - command_hover_start) * delta,
-                                    )
+                                    this.opacity(if command_hovered {
+                                        0.96 + 0.04 * delta
+                                    } else {
+                                        1.0
+                                    })
                                 },
                             ),
                     )
@@ -3692,125 +4030,19 @@ impl AlulaApp {
             )
     }
 
-    fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let collapsed = self.sidebar_collapsed;
-        let target = if collapsed { px(0.) } else { px(224.) };
-        let start = if collapsed { px(224.) } else { px(0.) };
-        let app = cx.entity();
-        let requests_app = app.clone();
-        let environments_app = app.clone();
-        let history_app = app.clone();
-        let new_request_hovered = self.new_request_hovered;
-        let new_request_focused = self.new_request_focus.is_focused(window);
-        let new_request_focus = self.new_request_focus.clone().tab_stop(true);
-        let new_request_hover_app = app.clone();
-        let new_request_key_app = app.clone();
-        let new_request_hover_start = if new_request_hovered { px(0.) } else { px(-1.) };
-        let new_request_hover_target = if new_request_hovered { px(-1.) } else { px(0.) };
-
-        let nav_item =
-            |section: WorkspaceSection,
-             label: &'static str,
-             icon: IconName,
-             active: bool,
-             count: usize,
-             on_click: Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>| {
-                let hovered = self.sidebar_hovered == Some(section);
-                let hover_app = app.clone();
-                let hover_start = if hovered { px(0.) } else { px(1.) };
-                let hover_target = if hovered { px(1.) } else { px(0.) };
-                div()
-                    .id(SharedString::from(format!("sidebar-{label}")))
-                    .relative()
-                    .w_full()
-                    .h(px(31.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .rounded(cx.theme().radius)
-                    .text_size(px(12.))
-                    .text_color(if active {
-                        cx.theme().foreground
-                    } else {
-                        cx.theme().muted_foreground
-                    })
-                    .when(active, |this| {
-                        this.bg(cx.theme().accent).child(
-                            div()
-                                .absolute()
-                                .left(px(0.))
-                                .w(px(2.))
-                                .h(px(14.))
-                                .rounded_full()
-                                .bg(cx.theme().primary),
-                        )
-                    })
-                    .when(!active, |this| {
-                        this.hover(|this| {
-                            this.bg(cx.theme().muted).text_color(cx.theme().foreground)
-                        })
-                    })
-                    .child(
-                        div()
-                            .w(px(18.))
-                            .mr_3()
-                            .flex_shrink_0()
-                            .flex()
-                            .justify_center()
-                            .child(Icon::new(icon).size_3p5().text_color(if active {
-                                cx.theme().primary
-                            } else {
-                                cx.theme().muted_foreground.opacity(0.72)
-                            })),
-                    )
-                    .child(label)
-                    .child(
-                        div()
-                            .ml_auto()
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .text_size(px(10.))
-                            .text_color(cx.theme().muted_foreground.opacity(0.64))
-                            .child(count.to_string()),
-                    )
-                    .on_click(move |event, window, cx| on_click(event, window, cx))
-                    .on_hover(move |is_hovered, _, cx| {
-                        hover_app.update(cx, |this, cx| {
-                            let next = if *is_hovered {
-                                Some(section)
-                            } else if this.sidebar_hovered == Some(section) {
-                                None
-                            } else {
-                                this.sidebar_hovered
-                            };
-                            if this.sidebar_hovered != next {
-                                this.sidebar_hovered = next;
-                                cx.notify();
-                            }
-                        });
-                    })
-                    .with_animation(
-                        SharedString::from(format!("sidebar-hover-{label}-{hovered}")),
-                        Animation::new(Duration::from_secs_f64(0.12))
-                            .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
-                        move |this, delta| {
-                            this.left(hover_start + (hover_target - hover_start) * delta)
-                        },
-                    )
-            };
-
-        let mut open_requests = div().mt_1().flex().flex_col().gap(px(2.));
-        for (index, tab) in self.tabs.iter().enumerate() {
-            let tab_app = app.clone();
-            let method = tab.draft.method;
-            let label = tab.title.clone();
-            open_requests = open_requests.child(
+    fn sidebar_request_row(&self, index: usize, app: Entity<Self>, cx: &mut App) -> Option<Div> {
+        let tab = self.tabs.get(index)?;
+        let method = tab.draft.method;
+        let label = tab.title.clone();
+        Some(
+            div().h(px(31.)).pb(px(2.)).child(
                 div()
                     .id(SharedString::from(format!(
                         "sidebar-request-{}",
                         tab.draft.id
                     )))
                     .w_full()
-                    .h(px(29.))
+                    .h_full()
                     .px_2()
                     .pl(px(22.))
                     .flex()
@@ -3841,13 +4073,155 @@ impl AlulaApp {
                             .text_color(cx.theme().muted_foreground),
                     )
                     .on_click(move |_, _, cx| {
-                        tab_app.update(cx, |this, cx| {
+                        app.update(cx, |this, cx| {
                             this.active_tab = index.min(this.tabs.len().saturating_sub(1));
                             this.show_selected_request(cx);
                         });
                     }),
-            );
-        }
+            ),
+        )
+    }
+
+    fn render_sidebar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let collapsed = self.sidebar_collapsed;
+        let target = if collapsed { px(0.) } else { px(224.) };
+        let start = if collapsed { px(224.) } else { px(0.) };
+        let app = cx.entity();
+        let requests_app = app.clone();
+        let environments_app = app.clone();
+        let history_app = app.clone();
+        let new_request_hovered = self.new_request_hovered;
+        let new_request_focused = self.new_request_focus.is_focused(window);
+        let new_request_focus = self.new_request_focus.clone().tab_stop(true);
+        let new_request_hover_app = app.clone();
+        let new_request_key_app = app.clone();
+        let new_request_press_app = app.clone();
+        let new_request_release_app = app.clone();
+        let new_request_cancel_app = app.clone();
+
+        let nav_item = |section: WorkspaceSection,
+                        label: &'static str,
+                        icon: IconName,
+                        active: bool,
+                        count: usize,
+                        on_click: SidebarNavClick| {
+            let hovered = self.sidebar_hovered == Some(section);
+            let hover_app = app.clone();
+            let press_app = app.clone();
+            let release_app = app.clone();
+            let cancel_app = app.clone();
+            div()
+                .id(SharedString::from(format!("sidebar-{label}")))
+                .relative()
+                .w_full()
+                .h(px(31.))
+                .px_3()
+                .flex()
+                .items_center()
+                .rounded(cx.theme().radius)
+                .text_size(px(12.))
+                .text_color(if active {
+                    cx.theme().foreground
+                } else {
+                    cx.theme().muted_foreground
+                })
+                .when(active, |this| {
+                    this.bg(cx.theme().accent).child(
+                        div()
+                            .absolute()
+                            .left(px(0.))
+                            .w(px(2.))
+                            .h(px(14.))
+                            .rounded_full()
+                            .bg(cx.theme().primary),
+                    )
+                })
+                .when(!active, |this| {
+                    this.hover(|this| this.bg(cx.theme().muted).text_color(cx.theme().foreground))
+                })
+                .child(
+                    div()
+                        .w(px(18.))
+                        .mr_3()
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_center()
+                        .child(Icon::new(icon).size_3p5().text_color(if active {
+                            cx.theme().primary
+                        } else {
+                            cx.theme().muted_foreground.opacity(0.72)
+                        })),
+                )
+                .child(label)
+                .child(
+                    div()
+                        .ml_auto()
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_size(px(10.))
+                        .text_color(cx.theme().muted_foreground.opacity(0.64))
+                        .child(count.to_string()),
+                )
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    press_app.update(cx, |this, _| {
+                        this.sidebar_pressed = Some(section);
+                    });
+                    window.prevent_default();
+                })
+                .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                    let activate = release_app.update(cx, |this, _| {
+                        let activate = this.sidebar_pressed == Some(section);
+                        this.sidebar_pressed = None;
+                        activate
+                    });
+                    if activate {
+                        on_click(window, cx);
+                    }
+                })
+                .on_mouse_up_out(MouseButton::Left, move |_, _, cx| {
+                    cancel_app.update(cx, |this, _| {
+                        if this.sidebar_pressed == Some(section) {
+                            this.sidebar_pressed = None;
+                        }
+                    });
+                })
+                .on_hover(move |is_hovered, _, cx| {
+                    hover_app.update(cx, |this, cx| {
+                        let next = if *is_hovered {
+                            Some(section)
+                        } else if this.sidebar_hovered == Some(section) {
+                            None
+                        } else {
+                            this.sidebar_hovered
+                        };
+                        if this.sidebar_hovered != next {
+                            this.sidebar_hovered = next;
+                            cx.notify();
+                        }
+                    });
+                })
+                .with_animation(
+                    SharedString::from(format!("sidebar-hover-{label}-{hovered}")),
+                    Animation::new(Duration::from_secs_f64(0.12))
+                        .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                    move |this, delta| {
+                        this.opacity(if hovered { 0.96 + 0.04 * delta } else { 1.0 })
+                    },
+                )
+        };
+
+        let sidebar_requests_app = app.clone();
+        let open_requests = uniform_list(
+            "sidebar-open-requests",
+            self.tabs.len(),
+            cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                range
+                    .filter_map(|index| {
+                        this.sidebar_request_row(index, sidebar_requests_app.clone(), cx)
+                    })
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .size_full();
 
         let sidebar = div()
             .w(target)
@@ -3930,7 +4304,27 @@ impl AlulaApp {
                                     .text_color(cx.theme().muted_foreground.opacity(0.68))
                                     .child("⌘ N"),
                             )
-                            .on_click(cx.listener(Self::add_request))
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                new_request_press_app.update(cx, |this, _| {
+                                    this.new_request_pressed = true;
+                                });
+                                window.prevent_default();
+                            })
+                            .on_mouse_up(MouseButton::Left, move |_, window, cx| {
+                                let activate = new_request_release_app.update(cx, |this, _| {
+                                    std::mem::take(&mut this.new_request_pressed)
+                                });
+                                if activate {
+                                    new_request_release_app.update(cx, |this, cx| {
+                                        this.add_request(&ClickEvent::default(), window, cx)
+                                    });
+                                }
+                            })
+                            .on_mouse_up_out(MouseButton::Left, move |_, _, cx| {
+                                new_request_cancel_app.update(cx, |this, _| {
+                                    this.new_request_pressed = false;
+                                });
+                            })
                             .on_key_down(move |event, window, cx| {
                                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                     new_request_key_app.update(cx, |this, cx| {
@@ -3955,11 +4349,11 @@ impl AlulaApp {
                                 Animation::new(Duration::from_secs_f64(0.12))
                                     .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                                 move |this, delta| {
-                                    this.top(
-                                        new_request_hover_start
-                                            + (new_request_hover_target - new_request_hover_start)
-                                                * delta,
-                                    )
+                                    this.opacity(if new_request_hovered {
+                                        0.96 + 0.04 * delta
+                                    } else {
+                                        1.0
+                                    })
                                 },
                             ),
                     )
@@ -3984,7 +4378,7 @@ impl AlulaApp {
                                 IconName::SquareTerminal,
                                 self.workspace_section == WorkspaceSection::Requests,
                                 self.tabs.len(),
-                                Box::new(move |_, _, cx| {
+                                Box::new(move |_, cx| {
                                     requests_app.update(cx, |this, cx| {
                                         this.select_workspace_section(
                                             WorkspaceSection::Requests,
@@ -3999,7 +4393,7 @@ impl AlulaApp {
                                 IconName::Globe,
                                 self.workspace_section == WorkspaceSection::Environments,
                                 self.environments.environments.len(),
-                                Box::new(move |_, _, cx| {
+                                Box::new(move |_, cx| {
                                     environments_app.update(cx, |this, cx| {
                                         this.select_workspace_section(
                                             WorkspaceSection::Environments,
@@ -4014,7 +4408,7 @@ impl AlulaApp {
                                 IconName::Redo2,
                                 self.workspace_section == WorkspaceSection::History,
                                 self.history.entries.len(),
-                                Box::new(move |_, _, cx| {
+                                Box::new(move |_, cx| {
                                     history_app.update(cx, |this, cx| {
                                         this.select_workspace_section(WorkspaceSection::History, cx)
                                     });
@@ -4038,13 +4432,7 @@ impl AlulaApp {
                                     .text_color(cx.theme().muted_foreground.opacity(0.64))
                                     .child("OPEN REQUESTS"),
                             )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_y_scrollbar()
-                                    .child(open_requests),
-                            ),
+                            .child(div().flex_1().min_h_0().child(open_requests)),
                     )
                     .child(
                         div()
@@ -4329,34 +4717,221 @@ impl AlulaApp {
         cx.notify();
     }
 
+    fn environment_variable_row(
+        &self,
+        environment_id: &str,
+        variable_index: usize,
+        app: Entity<Self>,
+        cx: &mut App,
+    ) -> Option<Div> {
+        let environment = self
+            .environments
+            .environments
+            .iter()
+            .find(|environment| environment.id == environment_id)?;
+        let variable = environment.variables.get(variable_index)?;
+        let hovered = self.hovered_environment_variable_id.as_deref() == Some(variable.id.as_str());
+        let hover_app = app.clone();
+        let hover_id = variable.id.clone();
+        let edit_app = app.clone();
+        let edit_environment_id = environment.id.clone();
+        let edit_variable_id = variable.id.clone();
+        let row_edit_app = app.clone();
+        let row_edit_environment_id = environment.id.clone();
+        let row_edit_variable_id = variable.id.clone();
+        let remove_app = app.clone();
+        let remove_environment_id = environment.id.clone();
+        let remove_variable_id = variable.id.clone();
+        let revealed = variable.secret
+            && self.revealed_secret_variable_id.as_deref() == Some(variable.id.as_str());
+        let display_value = if variable.secret && !revealed {
+            "••••••••".to_owned()
+        } else {
+            variable.value.clone().unwrap_or_default()
+        };
+        let action = if variable.secret {
+            let reveal_app = app.clone();
+            let reveal_id = variable.id.clone();
+            design_button(
+                SharedString::from(format!("reveal-environment-variable-{}", variable.id)),
+                if revealed { "Hide" } else { "Reveal" },
+            )
+            .secondary()
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                reveal_app.update(cx, |this, cx| {
+                    this.revealed_secret_variable_id = if this
+                        .revealed_secret_variable_id
+                        .as_deref()
+                        == Some(reveal_id.as_str())
+                    {
+                        None
+                    } else {
+                        Some(reveal_id.clone())
+                    };
+                    cx.notify();
+                });
+            })
+        } else {
+            design_button(
+                SharedString::from(format!("edit-environment-variable-{}", variable.id)),
+                "Edit",
+            )
+            .secondary()
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                edit_app.update(cx, |this, cx| {
+                    this.open_environment_variable_dialog(
+                        edit_environment_id.clone(),
+                        Some(edit_variable_id.clone()),
+                        window,
+                        cx,
+                    )
+                });
+            })
+        };
+        Some(
+            div().h(px(62.)).pt(px(1.)).pb(px(7.)).child(
+                div()
+                    .id(SharedString::from(format!(
+                        "environment-variable-row-{}",
+                        variable.id
+                    )))
+                    .relative()
+                    .w_full()
+                    .h_full()
+                    .px(px(11.))
+                    .flex()
+                    .items_center()
+                    .gap(px(11.))
+                    .cursor_pointer()
+                    .rounded(px(9.))
+                    .border_1()
+                    .border_color(if hovered {
+                        cx.theme().muted_foreground.opacity(0.32)
+                    } else {
+                        cx.theme().border
+                    })
+                    .bg(if hovered {
+                        cx.theme().secondary
+                    } else {
+                        cx.theme().background
+                    })
+                    .child(
+                        div()
+                            .w(px(210.))
+                            .flex_shrink_0()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_size(px(10.))
+                            .text_color(cx.theme().primary.lighten(0.14))
+                            .child(variable.name.clone()),
+                    )
+                    .child(
+                        Label::new(display_value)
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .text_size(px(10.))
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(
+                                design_button(
+                                    SharedString::from(format!(
+                                        "remove-environment-variable-{}",
+                                        variable.id
+                                    )),
+                                    "Delete",
+                                )
+                                .danger()
+                                .on_click(move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    remove_app.update(cx, |this, cx| {
+                                        this.remove_environment_variable(
+                                            &remove_environment_id,
+                                            &remove_variable_id,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                            )
+                            .child(action),
+                    )
+                    .on_click(move |_, window, cx| {
+                        row_edit_app.update(cx, |this, cx| {
+                            this.open_environment_variable_dialog(
+                                row_edit_environment_id.clone(),
+                                Some(row_edit_variable_id.clone()),
+                                window,
+                                cx,
+                            )
+                        });
+                    })
+                    .on_hover(move |is_hovered, _, cx| {
+                        hover_app.update(cx, |this, cx| {
+                            let next = if *is_hovered {
+                                Some(hover_id.clone())
+                            } else if this.hovered_environment_variable_id.as_deref()
+                                == Some(hover_id.as_str())
+                            {
+                                None
+                            } else {
+                                this.hovered_environment_variable_id.clone()
+                            };
+                            if this.hovered_environment_variable_id != next {
+                                this.hovered_environment_variable_id = next;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .with_animation(
+                        SharedString::from(format!(
+                            "environment-variable-hover-{}-{hovered}",
+                            variable.id
+                        )),
+                        Animation::new(Duration::from_secs_f64(0.12))
+                            .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                        move |this, delta| {
+                            this.opacity(if hovered { 0.98 + 0.02 * delta } else { 1.0 })
+                        },
+                    ),
+            ),
+        )
+    }
+
     fn render_environment_variable_rows(
         &self,
         environment: &alula::Environment,
         cx: &mut Context<Self>,
     ) -> Div {
-        let app = cx.entity();
         let query = self
             .environment_variable_search
             .read(cx)
             .value()
             .trim()
             .to_ascii_lowercase();
-        let variables = environment
+        let filtered_indices = environment
             .variables
             .iter()
-            .filter(|variable| {
-                query.is_empty()
-                    || variable.name.to_ascii_lowercase().contains(&query)
+            .enumerate()
+            .filter_map(|(index, variable)| {
+                (query.is_empty()
+                    || ascii_contains_ignore_case(&variable.name, &query)
                     || (!variable.secret
-                        && variable
-                            .value
-                            .as_deref()
-                            .unwrap_or_default()
-                            .to_ascii_lowercase()
-                            .contains(&query))
+                        && ascii_contains_ignore_case(
+                            variable.value.as_deref().unwrap_or_default(),
+                            &query,
+                        )))
+                .then_some(index)
             })
             .collect::<Vec<_>>();
-        if variables.is_empty() {
+        if filtered_indices.is_empty() {
             return empty_state(
                 if query.is_empty() {
                     "No variables yet"
@@ -4372,98 +4947,144 @@ impl AlulaApp {
             );
         }
 
-        let mut rows = div().flex().flex_col().gap_1();
-        for variable in variables {
-            let edit_app = app.clone();
-            let edit_environment_id = environment.id.clone();
-            let edit_variable_id = variable.id.clone();
-            let remove_app = app.clone();
-            let remove_environment_id = environment.id.clone();
-            let remove_variable_id = variable.id.clone();
-            let display_value = if variable.secret {
-                "••••••••".to_owned()
-            } else {
-                variable.value.clone().unwrap_or_default()
-            };
-            rows = rows.child(
+        let app = cx.entity();
+        let environment_id = environment.id.clone();
+        let list_id = SharedString::from(format!("environment-variables-{environment_id}"));
+        div().size_full().min_h_0().child(
+            uniform_list(
+                list_id,
+                filtered_indices.len(),
+                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                    range
+                        .filter_map(|index| {
+                            this.environment_variable_row(
+                                &environment_id,
+                                filtered_indices[index],
+                                app.clone(),
+                                cx,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .size_full(),
+        )
+    }
+
+    fn environment_request_row(
+        &self,
+        environment_id: &str,
+        request_index: usize,
+        app: Entity<Self>,
+        cx: &mut App,
+    ) -> Option<Div> {
+        let environment = self
+            .environments
+            .environments
+            .iter()
+            .find(|environment| environment.id == environment_id)?;
+        let request = environment.requests.get(request_index)?;
+        let hovered = self.hovered_environment_request_id.as_deref() == Some(request.id.as_str());
+        let hover_app = app.clone();
+        let hover_id = request.id.clone();
+        let open_app = app.clone();
+        let open_environment_id = environment.id.clone();
+        let open_request_id = request.id.clone();
+        Some(
+            div().h(px(62.)).pt(px(1.)).pb(px(7.)).child(
                 div()
+                    .id(SharedString::from(format!(
+                        "environment-request-row-{}",
+                        request.id
+                    )))
+                    .relative()
                     .w_full()
-                    .h(px(42.))
-                    .px_3()
+                    .h_full()
+                    .px(px(11.))
                     .flex()
                     .items_center()
-                    .gap_3()
-                    .rounded(cx.theme().radius)
+                    .gap(px(11.))
+                    .rounded(px(9.))
                     .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().sidebar)
+                    .border_color(if hovered {
+                        cx.theme().muted_foreground.opacity(0.32)
+                    } else {
+                        cx.theme().border
+                    })
+                    .bg(if hovered {
+                        cx.theme().secondary
+                    } else {
+                        cx.theme().background
+                    })
+                    .child(method_badge(request.method, cx))
                     .child(
                         div()
-                            .w(px(180.))
-                            .flex_shrink_0()
-                            .font_family(cx.theme().mono_font_family.clone())
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().primary)
-                            .child(format!("{{{{{}}}}}", variable.name)),
-                    )
-                    .child(
-                        Tag::secondary()
-                            .small()
-                            .rounded_full()
-                            .child(if variable.secret { "Secret" } else { "Public" }),
-                    )
-                    .child(
-                        Label::new(display_value)
                             .flex_1()
                             .min_w_0()
-                            .truncate()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground),
+                            .flex()
+                            .flex_col()
+                            .child(
+                                Label::new(request.display_name())
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight(580.)),
+                            )
+                            .child(
+                                Label::new(request.url.clone())
+                                    .mt(px(4.))
+                                    .truncate()
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .text_size(px(9.))
+                                    .text_color(cx.theme().muted_foreground.opacity(0.68)),
+                            ),
                     )
                     .child(
-                        Button::new(SharedString::from(format!(
-                            "edit-environment-variable-{}",
-                            variable.id
-                        )))
-                        .ghost()
-                        .small()
-                        .label("Edit")
+                        design_button(
+                            SharedString::from(format!("open-environment-request-{}", request.id)),
+                            "Open",
+                        )
+                        .secondary()
                         .on_click(move |_, window, cx| {
-                            edit_app.update(cx, |this, cx| {
-                                this.open_environment_variable_dialog(
-                                    edit_environment_id.clone(),
-                                    Some(edit_variable_id.clone()),
+                            open_app.update(cx, |this, cx| {
+                                this.open_environment_request(
+                                    &open_environment_id,
+                                    &open_request_id,
                                     window,
                                     cx,
                                 )
                             });
                         }),
                     )
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "remove-environment-variable-{}",
-                            variable.id
-                        )))
-                        .ghost()
-                        .small()
-                        .compact()
-                        .icon(IconName::Close)
-                        .tooltip("Remove variable")
-                        .on_click(move |_, window, cx| {
-                            remove_app.update(cx, |this, cx| {
-                                this.remove_environment_variable(
-                                    &remove_environment_id,
-                                    &remove_variable_id,
-                                    window,
-                                    cx,
-                                )
-                            });
-                        }),
+                    .on_hover(move |is_hovered, _, cx| {
+                        hover_app.update(cx, |this, cx| {
+                            let next = if *is_hovered {
+                                Some(hover_id.clone())
+                            } else if this.hovered_environment_request_id.as_deref()
+                                == Some(hover_id.as_str())
+                            {
+                                None
+                            } else {
+                                this.hovered_environment_request_id.clone()
+                            };
+                            if this.hovered_environment_request_id != next {
+                                this.hovered_environment_request_id = next;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .with_animation(
+                        SharedString::from(format!(
+                            "environment-request-hover-{}-{hovered}",
+                            request.id
+                        )),
+                        Animation::new(Duration::from_secs_f64(0.12))
+                            .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                        move |this, delta| {
+                            this.opacity(if hovered { 0.98 + 0.02 * delta } else { 1.0 })
+                        },
                     ),
-            );
-        }
-        rows
+            ),
+        )
     }
 
     fn render_environment_request_rows(
@@ -4471,28 +5092,25 @@ impl AlulaApp {
         environment: &alula::Environment,
         cx: &mut Context<Self>,
     ) -> Div {
-        let app = cx.entity();
         let query = self
             .environment_request_search
             .read(cx)
             .value()
             .trim()
             .to_ascii_lowercase();
-        let requests = environment
+        let filtered_indices = environment
             .requests
             .iter()
-            .filter(|request| {
-                query.is_empty()
-                    || request.display_name().to_ascii_lowercase().contains(&query)
-                    || request.url.to_ascii_lowercase().contains(&query)
-                    || request
-                        .method
-                        .as_str()
-                        .to_ascii_lowercase()
-                        .contains(&query)
+            .enumerate()
+            .filter_map(|(index, request)| {
+                (query.is_empty()
+                    || ascii_contains_ignore_case(&request.name, &query)
+                    || ascii_contains_ignore_case(&request.url, &query)
+                    || ascii_contains_ignore_case(request.method.as_str(), &query))
+                .then_some(index)
             })
             .collect::<Vec<_>>();
-        if requests.is_empty() {
+        if filtered_indices.is_empty() {
             return empty_state(
                 if query.is_empty() {
                     "No requests yet"
@@ -4508,69 +5126,28 @@ impl AlulaApp {
             );
         }
 
-        let mut rows = div().flex().flex_col().gap_1();
-        for request in requests {
-            let open_app = app.clone();
-            let open_environment_id = environment.id.clone();
-            let open_request_id = request.id.clone();
-            rows = rows.child(
-                div()
-                    .w_full()
-                    .h(px(52.))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .rounded(cx.theme().radius_lg)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().sidebar)
-                    .hover(|this| {
-                        this.border_color(cx.theme().muted_foreground.opacity(0.32))
-                            .bg(cx.theme().muted)
-                    })
-                    .child(method_badge(request.method, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                Label::new(request.display_name())
-                                    .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD),
+        let app = cx.entity();
+        let environment_id = environment.id.clone();
+        let list_id = SharedString::from(format!("environment-requests-{environment_id}"));
+        div().size_full().min_h_0().child(
+            uniform_list(
+                list_id,
+                filtered_indices.len(),
+                cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                    range
+                        .filter_map(|index| {
+                            this.environment_request_row(
+                                &environment_id,
+                                filtered_indices[index],
+                                app.clone(),
+                                cx,
                             )
-                            .child(
-                                Label::new(request.url.clone())
-                                    .truncate()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground),
-                            ),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "open-environment-request-{}",
-                            request.id
-                        )))
-                        .outline()
-                        .small()
-                        .label("Open")
-                        .on_click(move |_, window, cx| {
-                            open_app.update(cx, |this, cx| {
-                                this.open_environment_request(
-                                    &open_environment_id,
-                                    &open_request_id,
-                                    window,
-                                    cx,
-                                )
-                            });
-                        }),
-                    ),
-            );
-        }
-        rows
+                        })
+                        .collect::<Vec<_>>()
+                }),
+            )
+            .size_full(),
+        )
     }
 
     fn render_environment_detail(
@@ -4587,13 +5164,30 @@ impl AlulaApp {
         let variables_selected = self.environment_detail_tab == EnvironmentDetailTab::Variables;
         let request_tab_app = app.clone();
         let variable_tab_app = app.clone();
-        let (search, rows, add_variable) = if requests_selected {
+        let (search, rows, add_action) = if requests_selected {
+            let add_app = app.clone();
+            let add_environment_id = environment.id.clone();
             (
                 Input::new(&self.environment_request_search)
                     .prefix(IconName::Search)
+                    .h(px(32.))
+                    .text_size(px(11.))
+                    .rounded(px(6.))
                     .w_full(),
                 self.render_environment_request_rows(environment, cx),
-                None,
+                Some(
+                    design_icon_button(
+                        "environment-detail-add-request",
+                        IconName::Plus,
+                        "New request",
+                    )
+                    .primary()
+                    .on_click(move |_, window, cx| {
+                        add_app.update(cx, |this, cx| {
+                            this.add_environment_request(&add_environment_id, window, cx)
+                        });
+                    }),
+                ),
             )
         } else {
             let add_app = app.clone();
@@ -4601,24 +5195,28 @@ impl AlulaApp {
             (
                 Input::new(&self.environment_variable_search)
                     .prefix(IconName::Search)
+                    .h(px(32.))
+                    .text_size(px(11.))
+                    .rounded(px(6.))
                     .w_full(),
                 self.render_environment_variable_rows(environment, cx),
                 Some(
-                    Button::new("environment-detail-add-variable")
-                        .primary()
-                        .small()
-                        .icon(IconName::Plus)
-                        .label("Add variable")
-                        .on_click(move |_, window, cx| {
-                            add_app.update(cx, |this, cx| {
-                                this.open_environment_variable_dialog(
-                                    add_environment_id.clone(),
-                                    None,
-                                    window,
-                                    cx,
-                                )
-                            });
-                        }),
+                    design_icon_button(
+                        "environment-detail-add-variable",
+                        IconName::Plus,
+                        "New variable",
+                    )
+                    .primary()
+                    .on_click(move |_, window, cx| {
+                        add_app.update(cx, |this, cx| {
+                            this.open_environment_variable_dialog(
+                                add_environment_id.clone(),
+                                None,
+                                window,
+                                cx,
+                            )
+                        });
+                    }),
                 ),
             )
         };
@@ -4645,43 +5243,48 @@ impl AlulaApp {
                         .border_b_1()
                         .border_color(cx.theme().border)
                         .child(
-                            Button::new("back-to-environments")
-                                .ghost()
-                                .small()
-                                .icon(IconName::ArrowLeft)
-                                .label("Back")
-                                .on_click(move |_, _, cx| {
-                                    back_app
-                                        .update(cx, |this, cx| this.close_environment_details(cx));
-                                }),
+                            div().size(px(30.)).flex_none().child(
+                                Button::new("back-to-environments")
+                                    .secondary()
+                                    .size_full()
+                                    .px_0()
+                                    .rounded(px(6.))
+                                    .child(Icon::new(IconName::ArrowLeft).size(px(15.)))
+                                    .tooltip("Back to environments")
+                                    .on_click(move |_, _, cx| {
+                                        back_app.update(cx, |this, cx| {
+                                            this.close_environment_details(cx)
+                                        });
+                                    }),
+                            ),
                         )
                         .child(
                             div()
+                                // GPUI measures the custom button's intrinsic icon width here;
+                                // keep the reference's 12 px optical gap from the painted border.
+                                .ml(px(16.))
                                 .flex()
                                 .flex_col()
                                 .gap_1()
                                 .child(
                                     Label::new(environment.name.clone())
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_lg(),
+                                        .text_size(px(14.))
+                                        .font_weight(FontWeight(630.)),
                                 )
                                 .child(
                                     Label::new(format!(
-                                        "{} requests · {} variables",
+                                        "{} requests · {} variables · Active environment",
                                         environment.requests.len(),
                                         environment.variables.len()
                                     ))
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground),
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground.opacity(0.68)),
                                 ),
                         )
                         .child(
-                            Button::new("delete-environment-detail")
+                            design_button("delete-environment-detail", "Delete environment")
                                 .ml_auto()
                                 .danger()
-                                .small()
-                                .icon(IconName::Delete)
-                                .label("Delete")
                                 .on_click(move |_, window, cx| {
                                     delete_app.update(cx, |this, cx| {
                                         this.confirm_delete_environment(
@@ -4696,22 +5299,52 @@ impl AlulaApp {
                 )
                 .child(
                     div()
-                        .h(px(46.))
+                        .h(px(42.))
                         .px_4()
                         .flex_shrink_0()
                         .flex()
-                        .items_end()
-                        .gap_1()
+                        .gap(px(18.))
                         .border_b_1()
                         .border_color(cx.theme().border)
                         .child(
                             Button::new("environment-requests-tab")
-                                .ghost()
-                                .h(px(36.))
-                                .rounded_b_none()
-                                .label(format!("Requests ({})", environment.requests.len()))
+                                .custom(ButtonCustomVariant::new(cx).foreground(
+                                    if requests_selected {
+                                        cx.theme().foreground
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    },
+                                ))
+                                .with_size(px(12.57))
+                                .relative()
+                                .h_full()
+                                .px_0()
+                                .rounded_none()
+                                .font_weight(FontWeight::NORMAL)
+                                .child(
+                                    div().flex().items_center().gap_2().child("Requests").child(
+                                        div()
+                                            .px_1p5()
+                                            .py_0p5()
+                                            .rounded_full()
+                                            .bg(cx.theme().muted)
+                                            .font_family(cx.theme().mono_font_family.clone())
+                                            .text_size(px(9.))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(environment.requests.len().to_string()),
+                                    ),
+                                )
                                 .when(requests_selected, |this| {
-                                    this.bg(cx.theme().accent).text_color(cx.theme().foreground)
+                                    this.child(
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .right_0()
+                                            .bottom(px(-1.))
+                                            .h(px(2.))
+                                            .rounded_t(px(2.))
+                                            .bg(cx.theme().primary),
+                                    )
                                 })
                                 .on_click(move |_, _, cx| {
                                     request_tab_app.update(cx, |this, cx| {
@@ -4723,12 +5356,48 @@ impl AlulaApp {
                         )
                         .child(
                             Button::new("environment-variables-tab")
-                                .ghost()
-                                .h(px(36.))
-                                .rounded_b_none()
-                                .label(format!("Variables ({})", environment.variables.len()))
+                                .custom(ButtonCustomVariant::new(cx).foreground(
+                                    if variables_selected {
+                                        cx.theme().foreground
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    },
+                                ))
+                                .with_size(px(12.57))
+                                .relative()
+                                .h_full()
+                                .px_0()
+                                .rounded_none()
+                                .font_weight(FontWeight::NORMAL)
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child("Variables")
+                                        .child(
+                                            div()
+                                                .px_1p5()
+                                                .py_0p5()
+                                                .rounded_full()
+                                                .bg(cx.theme().muted)
+                                                .font_family(cx.theme().mono_font_family.clone())
+                                                .text_size(px(9.))
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(environment.variables.len().to_string()),
+                                        ),
+                                )
                                 .when(variables_selected, |this| {
-                                    this.bg(cx.theme().accent).text_color(cx.theme().foreground)
+                                    this.child(
+                                        div()
+                                            .absolute()
+                                            .left_0()
+                                            .right_0()
+                                            .bottom(px(-1.))
+                                            .h(px(2.))
+                                            .rounded_t(px(2.))
+                                            .bg(cx.theme().primary),
+                                    )
                                 })
                                 .on_click(move |_, _, cx| {
                                     variable_tab_app.update(cx, |this, cx| {
@@ -4747,7 +5416,6 @@ impl AlulaApp {
                         .flex()
                         .flex_col()
                         .gap_3()
-                        .bg(cx.theme().background)
                         .child(
                             div()
                                 .w_full()
@@ -4755,10 +5423,189 @@ impl AlulaApp {
                                 .flex()
                                 .items_center()
                                 .gap_2()
-                                .child(div().w(px(360.)).child(search))
-                                .children(add_variable),
+                                .child(div().w(px(280.)).child(search))
+                                .child(div().ml_auto().children(add_action)),
                         )
-                        .child(div().flex_1().min_h_0().overflow_y_scrollbar().child(rows)),
+                        .child(div().flex_1().min_h_0().child(rows)),
+                ),
+        )
+    }
+
+    fn environment_card(&self, index: usize, app: Entity<Self>, cx: &mut App) -> Option<Div> {
+        let environment = self.environments.environments.get(index)?;
+        let hovered = self.hovered_environment_id.as_deref() == Some(environment.id.as_str());
+        let hover_app = app.clone();
+        let hover_id = environment.id.clone();
+        let open_app = app.clone();
+        let open_id = environment.id.clone();
+        let view_app = app.clone();
+        let view_id = environment.id.clone();
+        let delete_app = app.clone();
+        let delete_id = environment.id.clone();
+        let delete_name = environment.name.clone();
+        Some(
+            div()
+                .w_full()
+                .h(px(80.))
+                .flex_shrink_0()
+                .pt(px(1.))
+                .pb(px(7.))
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "environment-card-{}",
+                            environment.id
+                        )))
+                        .w_full()
+                        .h_full()
+                        .px(px(13.))
+                        .flex()
+                        .items_center()
+                        .cursor_pointer()
+                        .rounded(px(9.))
+                        .border_1()
+                        .border_color(if hovered {
+                            cx.theme().muted_foreground.opacity(0.32)
+                        } else {
+                            cx.theme().border
+                        })
+                        .bg(if hovered {
+                            cx.theme().secondary
+                        } else {
+                            cx.theme().background
+                        })
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .items_center()
+                                .gap(px(7.))
+                                .child(
+                                    div()
+                                        .size(px(15.))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .bg(cx.theme().primary.opacity(0.12))
+                                        .child(
+                                            div()
+                                                .size(px(7.))
+                                                .rounded_full()
+                                                .bg(cx.theme().primary),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .flex_col()
+                                        .child(
+                                            Label::new(environment.name.clone())
+                                                .truncate()
+                                                .text_size(px(13.))
+                                                .font_weight(FontWeight(610.)),
+                                        )
+                                        .child(
+                                            Label::new(format!(
+                                                "{} variables · {} requests",
+                                                environment.variables.len(),
+                                                environment.requests.len()
+                                            ))
+                                            .mt(px(5.))
+                                            .text_size(px(10.))
+                                            .text_color(cx.theme().muted_foreground.opacity(0.68)),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .ml(px(16.))
+                                .flex()
+                                .items_center()
+                                .gap(px(5.))
+                                .child(
+                                    design_button(
+                                        SharedString::from(format!(
+                                            "delete-environment-{}",
+                                            environment.id
+                                        )),
+                                        "Delete",
+                                    )
+                                    .text()
+                                    .px(px(7.))
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            delete_app.update(cx, |this, cx| {
+                                                this.confirm_delete_environment(
+                                                    delete_id.clone(),
+                                                    delete_name.clone(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            });
+                                        },
+                                    ),
+                                )
+                                .child(
+                                    design_button(
+                                        SharedString::from(format!(
+                                            "view-environment-{}",
+                                            environment.id
+                                        )),
+                                        "View",
+                                    )
+                                    .secondary()
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            view_app.update(cx, |this, cx| {
+                                                this.open_environment_details(
+                                                    view_id.clone(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            });
+                                        },
+                                    ),
+                                ),
+                        )
+                        .on_click(move |_, window, cx| {
+                            open_app.update(cx, |this, cx| {
+                                this.open_environment_details(open_id.clone(), window, cx)
+                            });
+                        })
+                        .on_hover(move |is_hovered, _, cx| {
+                            hover_app.update(cx, |this, cx| {
+                                let next = if *is_hovered {
+                                    Some(hover_id.clone())
+                                } else if this.hovered_environment_id.as_deref()
+                                    == Some(hover_id.as_str())
+                                {
+                                    None
+                                } else {
+                                    this.hovered_environment_id.clone()
+                                };
+                                if this.hovered_environment_id != next {
+                                    this.hovered_environment_id = next;
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .with_animation(
+                            SharedString::from(format!(
+                                "environment-card-hover-{}-{hovered}",
+                                environment.id
+                            )),
+                            Animation::new(Duration::from_secs_f64(0.12))
+                                .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                            move |this, delta| {
+                                this.opacity(if hovered { 0.98 + 0.02 * delta } else { 1.0 })
+                            },
+                        ),
                 ),
         )
     }
@@ -4771,25 +5618,18 @@ impl AlulaApp {
             .value()
             .trim()
             .to_ascii_lowercase();
-        let environments = self
+        let filtered_indices = self
             .environments
             .environments
             .iter()
-            .filter(|environment| {
-                query.is_empty() || environment.name.to_ascii_lowercase().contains(&query)
+            .enumerate()
+            .filter_map(|(index, environment)| {
+                (query.is_empty() || ascii_contains_ignore_case(&environment.name, &query))
+                    .then_some(index)
             })
             .collect::<Vec<_>>();
-        let mut content = div()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scrollbar()
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .bg(cx.theme().background);
-        if environments.is_empty() {
-            content = content.child(empty_state(
+        let content = if filtered_indices.is_empty() {
+            div().flex_1().min_h_0().child(empty_state(
                 if self.environments.environments.is_empty() {
                     "No environments yet"
                 } else {
@@ -4801,106 +5641,23 @@ impl AlulaApp {
                     "Try a different search"
                 },
                 cx,
-            ));
+            ))
         } else {
-            for environment in environments {
-                let open_app = app.clone();
-                let open_id = environment.id.clone();
-                let view_app = app.clone();
-                let view_id = environment.id.clone();
-                let delete_app = app.clone();
-                let delete_id = environment.id.clone();
-                let delete_name = environment.name.clone();
-                content = content.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "environment-card-{}",
-                            environment.id
-                        )))
-                        .w_full()
-                        .h(px(68.))
-                        .px_4()
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .cursor_pointer()
-                        .rounded(cx.theme().radius_lg)
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().sidebar)
-                        .hover(|this| {
-                            this.border_color(cx.theme().primary.opacity(0.36))
-                                .bg(cx.theme().muted)
-                        })
-                        .child(div().size(px(8.)).rounded_full().bg(cx.theme().primary))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .child(
-                                    Label::new(environment.name.clone())
-                                        .truncate()
-                                        .font_weight(FontWeight::SEMIBOLD),
-                                )
-                                .child(
-                                    Label::new(format!(
-                                        "{} variables · {} requests",
-                                        environment.variables.len(),
-                                        environment.requests.len()
-                                    ))
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground),
-                                ),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!(
-                                "delete-environment-{}",
-                                environment.id
-                            )))
-                            .ghost()
-                            .small()
-                            .icon(IconName::Delete)
-                            .label("Delete")
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                delete_app.update(cx, |this, cx| {
-                                    this.confirm_delete_environment(
-                                        delete_id.clone(),
-                                        delete_name.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                });
-                            }),
-                        )
-                        .child(
-                            Button::new(SharedString::from(format!(
-                                "view-environment-{}",
-                                environment.id
-                            )))
-                            .outline()
-                            .small()
-                            .icon(IconName::ChevronRight)
-                            .label("View")
-                            .on_click(move |_, window, cx| {
-                                cx.stop_propagation();
-                                view_app.update(cx, |this, cx| {
-                                    this.open_environment_details(view_id.clone(), window, cx)
-                                });
-                            }),
-                        )
-                        .on_click(move |_, window, cx| {
-                            open_app.update(cx, |this, cx| {
-                                this.open_environment_details(open_id.clone(), window, cx)
-                            });
-                        }),
-                );
-            }
-        }
+            div().flex_1().min_h_0().p_3().child(
+                uniform_list(
+                    "environment-index",
+                    filtered_indices.len(),
+                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        range
+                            .filter_map(|index| {
+                                this.environment_card(filtered_indices[index], app.clone(), cx)
+                            })
+                            .collect::<Vec<_>>()
+                    }),
+                )
+                .size_full(),
+            )
+        };
 
         div().size_full().min_h_0().p_4().child(
             div()
@@ -4915,12 +5672,11 @@ impl AlulaApp {
                 .flex_col()
                 .child(
                     div()
-                        .h(px(68.))
-                        .px_4()
+                        .h(px(66.))
+                        .px(px(15.))
                         .flex_shrink_0()
                         .flex()
                         .items_center()
-                        .gap_3()
                         .border_b_1()
                         .border_color(cx.theme().border)
                         .child(
@@ -4930,35 +5686,46 @@ impl AlulaApp {
                                 .gap_1()
                                 .child(
                                     Label::new("Environments")
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_lg(),
+                                        .text_size(px(16.))
+                                        .font_weight(FontWeight(650.)),
                                 )
                                 .child(
-                                    Label::new("Reusable request groups and variables")
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground),
+                                    Label::new(
+                                        "Reusable request groups, endpoints, and scoped variables",
+                                    )
+                                    .text_size(px(10.))
+                                    .text_color(cx.theme().muted_foreground.opacity(0.68)),
                                 ),
                         )
                         .child(
-                            div().ml_auto().w(px(280.)).child(
-                                Input::new(&self.environment_search)
-                                    .prefix(IconName::Search)
-                                    .w_full(),
-                            ),
-                        )
-                        .child(
-                            Tag::secondary()
-                                .small()
-                                .rounded_full()
-                                .child(format!("{} total", self.environments.environments.len())),
-                        )
-                        .child(
-                            Button::new("new-environment")
-                                .primary()
-                                .small()
-                                .icon(IconName::Plus)
-                                .label("New environment")
-                                .on_click(cx.listener(Self::open_environment_dialog)),
+                            div()
+                                .ml_auto()
+                                .flex()
+                                .items_center()
+                                .gap(px(7.))
+                                .child(
+                                    div().w(px(280.)).child(
+                                        Input::new(&self.environment_search)
+                                            .prefix(IconName::Search)
+                                            .h(px(32.))
+                                            .text_size(px(11.))
+                                            .rounded(px(6.))
+                                            .w_full(),
+                                    ),
+                                )
+                                .child(quiet_badge(
+                                    format!("{} total", self.environments.environments.len()),
+                                    cx,
+                                ))
+                                .child(
+                                    design_icon_button(
+                                        "new-environment",
+                                        IconName::Plus,
+                                        "New environment",
+                                    )
+                                    .primary()
+                                    .on_click(cx.listener(Self::open_environment_dialog)),
+                                ),
                         ),
                 )
                 .child(content),
@@ -4966,7 +5733,13 @@ impl AlulaApp {
     }
 
     fn render_environments(&self, cx: &mut Context<Self>) -> Div {
-        self.selected_environment_id
+        let transition_key = self
+            .selected_environment_id
+            .as_deref()
+            .map(|id| format!("environment-detail-enter-{id}"))
+            .unwrap_or_else(|| "environment-index-enter".to_owned());
+        let page = self
+            .selected_environment_id
             .as_deref()
             .and_then(|environment_id| {
                 self.environments
@@ -4975,7 +5748,15 @@ impl AlulaApp {
                     .find(|environment| environment.id == environment_id)
             })
             .map(|environment| self.render_environment_detail(environment, cx))
-            .unwrap_or_else(|| self.render_environment_index(cx))
+            .unwrap_or_else(|| self.render_environment_index(cx));
+        div().size_full().min_h_0().child(
+            page.with_animation(
+                SharedString::from(transition_key),
+                Animation::new(Duration::from_secs_f64(0.18))
+                    .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                |this, delta| this.opacity(delta),
+            ),
+        )
     }
 
     fn history_entry_row(&self, index: usize, app: Entity<Self>, cx: &mut App) -> Option<Div> {
@@ -4984,7 +5765,10 @@ impl AlulaApp {
         let delete_history_app = app.clone();
         let delete_history_id = entry.id.clone();
         let delete_history_name = entry.request.display_name();
-        let (outcome, outcome_color) = if let Some(status) = entry.status {
+        let hovered = self.hovered_history_id.as_deref() == Some(entry.id.as_str());
+        let hover_app = app.clone();
+        let hover_id = entry.id.clone();
+        let (outcome, outcome_color, outcome_detail) = if let Some(status) = entry.status {
             let color = if status < 300 {
                 cx.theme().success
             } else if status < 400 {
@@ -5002,33 +5786,41 @@ impl AlulaApp {
                     format_size(entry.size_bytes.unwrap_or_default())
                 ),
                 color,
+                None,
             )
         } else {
-            (
-                entry
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "Request failed".into()),
-                cx.theme().danger,
-            )
+            let error = entry
+                .error
+                .clone()
+                .unwrap_or_else(|| "Request failed".into());
+            let (summary, detail) = split_history_error(&error);
+            (summary, cx.theme().danger, detail)
         };
+        let has_outcome_detail = outcome_detail.is_some();
+        let outcome_is_truncatable_error = entry.status.is_none() && !has_outcome_detail;
         Some(
-            div().h(px(72.)).pb_2().child(
+            div().h(px(70.)).pt(px(1.)).pb(px(7.)).child(
                 div()
+                    .id(SharedString::from(format!("history-row-{}", entry.id)))
+                    .relative()
                     .w_full()
                     .h_full()
-                    .px_4()
+                    .px(px(11.))
                     .py_2()
                     .flex()
                     .items_center()
-                    .gap_3()
-                    .rounded(cx.theme().radius_lg)
+                    .gap(px(11.))
+                    .rounded(px(9.))
                     .border_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().sidebar)
-                    .hover(|this| {
-                        this.border_color(cx.theme().muted_foreground.opacity(0.32))
-                            .bg(cx.theme().muted)
+                    .border_color(if hovered {
+                        cx.theme().muted_foreground.opacity(0.32)
+                    } else {
+                        cx.theme().border
+                    })
+                    .bg(if hovered {
+                        cx.theme().secondary
+                    } else {
+                        cx.theme().background
                     })
                     .child(method_badge(entry.request.method, cx))
                     .child(
@@ -5037,102 +5829,195 @@ impl AlulaApp {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .gap_1()
                             .child(
                                 Label::new(entry.request.display_name())
                                     .truncate()
-                                    .font_weight(FontWeight::SEMIBOLD),
+                                    .text_size(px(12.))
+                                    .font_weight(FontWeight(580.)),
                             )
                             .child(
                                 div()
+                                    .mt(px(5.))
+                                    .min_w_0()
+                                    .overflow_hidden()
                                     .flex()
                                     .items_center()
-                                    .gap_2()
+                                    .gap(px(9.))
                                     .child(
                                         div()
-                                            .px_2()
-                                            .py_0p5()
+                                            .min_w_0()
+                                            .when(outcome_is_truncatable_error, |this| {
+                                                this.flex_1()
+                                            })
+                                            .when(!outcome_is_truncatable_error, |this| {
+                                                this.flex_shrink_0()
+                                            })
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .px(px(6.))
+                                            .py(px(3.))
                                             .rounded_full()
                                             .bg(outcome_color.opacity(0.1))
-                                            .text_size(px(10.))
-                                            .font_weight(FontWeight::MEDIUM)
+                                            .font_family(cx.theme().mono_font_family.clone())
+                                            .text_size(px(8.))
                                             .text_color(outcome_color)
                                             .child(outcome),
                                     )
+                                    .children(outcome_detail.map(|detail| {
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .text_ellipsis()
+                                            .whitespace_nowrap()
+                                            .text_size(px(9.))
+                                            .text_color(cx.theme().muted_foreground.opacity(0.68))
+                                            .child(detail)
+                                    }))
                                     .child(
                                         Label::new(relative_history_time(entry.sent_at_unix_ms))
+                                            .flex_shrink_0()
                                             .truncate()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground),
+                                            .text_size(px(9.))
+                                            .text_color(cx.theme().muted_foreground.opacity(0.68)),
                                     ),
                             ),
                     )
                     .child(
-                        Button::new(SharedString::from(format!(
-                            "open-history-request-{}",
-                            entry.id
-                        )))
-                        .outline()
-                        .small()
-                        .label("Open as tab")
-                        .on_click(move |_, window, cx| {
-                            app.update(cx, |this, cx| {
-                                this.open_history_request(&open_history_id, window, cx)
-                            });
-                        }),
-                    )
-                    .child(
-                        Button::new(SharedString::from(format!(
-                            "delete-history-entry-{}",
-                            entry.id
-                        )))
-                        .danger()
-                        .small()
-                        .icon(IconName::Delete)
-                        .label("Delete")
-                        .on_click(move |_, window, cx| {
-                            delete_history_app.update(cx, |this, cx| {
-                                this.confirm_delete_history_entry(
-                                    delete_history_id.clone(),
-                                    delete_history_name.clone(),
-                                    window,
-                                    cx,
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(
+                                design_button(
+                                    SharedString::from(format!(
+                                        "open-history-request-{}",
+                                        entry.id
+                                    )),
+                                    "Open as tab",
                                 )
-                            });
-                        }),
+                                .secondary()
+                                .on_click(move |_, window, cx| {
+                                    app.update(cx, |this, cx| {
+                                        this.open_history_request(&open_history_id, window, cx)
+                                    });
+                                }),
+                            )
+                            .child(
+                                design_button(
+                                    SharedString::from(format!(
+                                        "delete-history-entry-{}",
+                                        entry.id
+                                    )),
+                                    "Delete",
+                                )
+                                .danger()
+                                .on_click(move |_, window, cx| {
+                                    delete_history_app.update(cx, |this, cx| {
+                                        this.confirm_delete_history_entry(
+                                            delete_history_id.clone(),
+                                            delete_history_name.clone(),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                }),
+                            ),
+                    )
+                    .on_hover(move |is_hovered, _, cx| {
+                        hover_app.update(cx, |this, cx| {
+                            let next = if *is_hovered {
+                                Some(hover_id.clone())
+                            } else if this.hovered_history_id.as_deref() == Some(hover_id.as_str())
+                            {
+                                None
+                            } else {
+                                this.hovered_history_id.clone()
+                            };
+                            if this.hovered_history_id != next {
+                                this.hovered_history_id = next;
+                                cx.notify();
+                            }
+                        });
+                    })
+                    .with_animation(
+                        SharedString::from(format!("history-hover-{}-{hovered}", entry.id)),
+                        Animation::new(Duration::from_secs_f64(0.12))
+                            .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                        move |this, delta| {
+                            this.opacity(if hovered { 0.98 + 0.02 * delta } else { 1.0 })
+                        },
                     ),
             ),
         )
     }
 
     fn render_history(&self, cx: &mut Context<Self>) -> Div {
+        let query = self
+            .history_search
+            .read(cx)
+            .value()
+            .trim()
+            .to_ascii_lowercase();
+        let filtered_indices = self
+            .history
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                let searchable = format!(
+                    "{} {} {} {} {}",
+                    entry.request.method.as_str(),
+                    entry.request.display_name(),
+                    entry.request.url,
+                    entry
+                        .status
+                        .map(|status| status.to_string())
+                        .unwrap_or_default(),
+                    entry.error.as_deref().unwrap_or_default(),
+                )
+                .to_ascii_lowercase();
+                (query.is_empty() || searchable.contains(&query)).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let visible_count = filtered_indices.len();
+        let count_label = if query.is_empty() {
+            format!("{} entries", self.history.entries.len())
+        } else {
+            format!("{} of {}", visible_count, self.history.entries.len())
+        };
         let content = if self.history.entries.is_empty() {
             div().flex_1().min_h_0().child(empty_state(
                 "No request history yet",
                 "Each completed or failed send is recorded independently of tabs",
                 cx,
             ))
+        } else if filtered_indices.is_empty() {
+            div().flex_1().min_h_0().child(empty_state(
+                "No matching history",
+                "Try a different method, request name, URL, status, or error",
+                cx,
+            ))
         } else {
             let app = cx.entity();
-            div()
-                .flex_1()
-                .min_h_0()
-                .p_3()
-                .bg(cx.theme().background)
-                .child(
-                    uniform_list(
-                        "history-entries",
-                        self.history.entries.len(),
-                        cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                            range
-                                .filter_map(|index| this.history_entry_row(index, app.clone(), cx))
-                                .collect::<Vec<_>>()
-                        }),
-                    )
-                    .size_full(),
+            div().flex_1().min_h_0().p_3().child(
+                uniform_list(
+                    "history-entries",
+                    filtered_indices.len(),
+                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        range
+                            .filter_map(|index| {
+                                this.history_entry_row(filtered_indices[index], app.clone(), cx)
+                            })
+                            .collect::<Vec<_>>()
+                    }),
                 )
+                .size_full(),
+            )
         };
-        div()
+        let page = div()
             .size_full()
             .min_h_0()
             .p_4()
@@ -5149,12 +6034,11 @@ impl AlulaApp {
                     .flex_col()
                     .child(
                         div()
-                            .h(px(58.))
-                            .px_4()
+                            .h(px(66.))
+                            .px(px(15.))
                             .flex_shrink_0()
                             .flex()
                             .items_center()
-                            .justify_between()
                             .border_b_1()
                             .border_color(cx.theme().border)
                             .child(
@@ -5164,24 +6048,44 @@ impl AlulaApp {
                                     .gap_1()
                                     .child(
                                         Label::new("History")
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_lg(),
+                                            .text_size(px(16.))
+                                            .font_weight(FontWeight(650.)),
                                     )
                                     .child(
                                         Label::new("Persistent request executions; response bodies are not retained")
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground),
+                                            .text_size(px(10.))
+                                            .text_color(cx.theme().muted_foreground.opacity(0.68)),
                                     ),
                             )
                             .child(
-                                Tag::secondary()
-                                    .small()
-                                    .rounded_full()
-                                    .child(format!("{} entries", self.history.entries.len())),
+                                div()
+                                    .ml_auto()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(7.))
+                                    .child(
+                                        div().w(px(280.)).child(
+                                            Input::new(&self.history_search)
+                                                .prefix(IconName::Search)
+                                                .h(px(32.))
+                                                .text_size(px(11.))
+                                                .rounded(px(6.))
+                                                .w_full(),
+                                        ),
+                                    )
+                                    .child(quiet_badge(count_label, cx)),
                             ),
                     )
                     .child(content),
-            )
+            );
+        div().size_full().min_h_0().child(
+            page.with_animation(
+                "history-workspace-enter",
+                Animation::new(Duration::from_secs_f64(0.28))
+                    .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                |this, delta| this.opacity(delta),
+            ),
+        )
     }
 
     fn render_request_builder(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -5189,24 +6093,22 @@ impl AlulaApp {
         let method = tab.method.clone();
         let url = tab.url.clone();
         let url_state = tab.url_template_state.clone();
-        let has_url_error = matches!(url_state, TemplateVisualState::Error(_));
+        let has_url_error = url_state.error.is_some();
         let mut url_input = Input::new(&url)
             .large()
             .appearance(false)
             .focus_bordered(false)
             .w_full();
-        url_input = match &url_state {
-            TemplateVisualState::Plain => url_input,
-            TemplateVisualState::Valid => url_input.text_color(cx.theme().primary),
-            TemplateVisualState::Error(message) => url_input.text_color(cx.theme().danger).suffix(
+        if let Some(message) = &url_state.error {
+            url_input = url_input.text_color(cx.theme().danger).suffix(
                 Button::new("url-variable-error")
                     .ghost()
                     .small()
                     .compact()
                     .icon(IconName::TriangleAlert)
                     .tooltip(message.clone()),
-            ),
-        };
+            );
+        }
         let composer_focused = method
             .read(cx)
             .focus_handle(cx)
@@ -5229,8 +6131,6 @@ impl AlulaApp {
         };
         let send_hovered = self.send_hovered && (!sending || can_stop);
         let send_hover_app = cx.entity();
-        let send_hover_start = if send_hovered { px(0.) } else { px(-1.) };
-        let send_hover_target = if send_hovered { px(-1.) } else { px(0.) };
         let arrow_hover_start = if send_hovered { px(0.) } else { px(3.) };
         let arrow_hover_target = if send_hovered { px(3.) } else { px(0.) };
         let send_animation_id = tab.draft.id.clone();
@@ -5399,10 +6299,11 @@ impl AlulaApp {
                                     Animation::new(Duration::from_secs_f64(0.12))
                                         .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                                     move |this, delta| {
-                                        this.top(
-                                            send_hover_start
-                                                + (send_hover_target - send_hover_start) * delta,
-                                        )
+                                        this.opacity(if send_hovered {
+                                            0.96 + 0.04 * delta
+                                        } else {
+                                            1.0
+                                        })
                                     },
                                 ),
                         ),
@@ -5469,13 +6370,13 @@ impl AlulaApp {
             div()
                 .relative()
                 .size_full()
-                .when(matches!(state, TemplateVisualState::Error(_)), |this| {
+                .when(state.error.is_some(), |this| {
                     this.border_1()
                         .border_color(cx.theme().danger.opacity(0.7))
                         .rounded(cx.theme().radius)
                 })
                 .child(Input::new(&body).size_full())
-                .when(matches!(state, TemplateVisualState::Valid), |this| {
+                .when(state.is_valid(), |this| {
                     this.child(
                         div()
                             .absolute()
@@ -5490,25 +6391,19 @@ impl AlulaApp {
                             .child("Variables"),
                     )
                 })
-                .when_some(
-                    match &state {
-                        TemplateVisualState::Error(message) => Some(message.clone()),
-                        _ => None,
-                    },
-                    |this, message| {
-                        this.child(
-                            Button::new("body-variable-error")
-                                .absolute()
-                                .top_2()
-                                .right_2()
-                                .ghost()
-                                .small()
-                                .compact()
-                                .icon(IconName::TriangleAlert)
-                                .tooltip(message),
-                        )
-                    },
-                ),
+                .when_some(state.error.clone(), |this, message| {
+                    this.child(
+                        Button::new("body-variable-error")
+                            .absolute()
+                            .top_2()
+                            .right_2()
+                            .ghost()
+                            .small()
+                            .compact()
+                            .icon(IconName::TriangleAlert)
+                            .tooltip(message),
+                    )
+                }),
         )
     }
 
@@ -5529,55 +6424,46 @@ impl AlulaApp {
             let key_state = if enabled {
                 pair.key_template_state.borrow().clone()
             } else {
-                TemplateVisualState::Plain
+                TemplateVisualState::default()
             };
             let value_state = if enabled {
                 pair.value_template_state.borrow().clone()
             } else {
-                TemplateVisualState::Plain
+                TemplateVisualState::default()
             };
-            let has_error = matches!(key_state, TemplateVisualState::Error(_))
-                || matches!(value_state, TemplateVisualState::Error(_));
+            let has_error = key_state.error.is_some() || value_state.error.is_some();
             let mut key_input = Input::new(&key)
                 .small()
                 .appearance(false)
                 .focus_bordered(false)
                 .w_full()
                 .disabled(!enabled);
-            key_input = match &key_state {
-                TemplateVisualState::Plain => key_input,
-                TemplateVisualState::Valid => key_input.text_color(cx.theme().primary),
-                TemplateVisualState::Error(message) => {
-                    key_input.text_color(cx.theme().danger).suffix(
-                        Button::new(("pair-key-variable-error", index))
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(IconName::TriangleAlert)
-                            .tooltip(message.clone()),
-                    )
-                }
-            };
+            if let Some(message) = &key_state.error {
+                key_input = key_input.text_color(cx.theme().danger).suffix(
+                    Button::new(("pair-key-variable-error", index))
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::TriangleAlert)
+                        .tooltip(message.clone()),
+                );
+            }
             let mut value_input = Input::new(&value)
                 .small()
                 .appearance(false)
                 .focus_bordered(false)
                 .w_full()
                 .disabled(!enabled);
-            value_input = match &value_state {
-                TemplateVisualState::Plain => value_input,
-                TemplateVisualState::Valid => value_input.text_color(cx.theme().primary),
-                TemplateVisualState::Error(message) => {
-                    value_input.text_color(cx.theme().danger).suffix(
-                        Button::new(("pair-value-variable-error", index))
-                            .ghost()
-                            .small()
-                            .compact()
-                            .icon(IconName::TriangleAlert)
-                            .tooltip(message.clone()),
-                    )
-                }
-            };
+            if let Some(message) = &value_state.error {
+                value_input = value_input.text_color(cx.theme().danger).suffix(
+                    Button::new(("pair-value-variable-error", index))
+                        .ghost()
+                        .small()
+                        .compact()
+                        .icon(IconName::TriangleAlert)
+                        .tooltip(message.clone()),
+                );
+            }
             list = list.child(
                 div()
                     .w_full()
@@ -5945,6 +6831,43 @@ impl AlulaApp {
         )
     }
 
+    fn response_switch_button(
+        segment: ResponseSwitchSegment,
+        selected: bool,
+        style: ButtonCustomVariant,
+        app: Entity<Self>,
+        cx: &App,
+    ) -> Button {
+        Button::new(segment.id)
+            .custom(style)
+            // The 27 px switch has a 1 px border and 2 px padding on each side,
+            // leaving an exact 21 px fill area for every segment.
+            .h(px(21.))
+            .w(segment.width)
+            .px_2()
+            .rounded(px(5.))
+            .selected(selected)
+            .when(selected, |this| {
+                this.bg(cx.theme().secondary.lighten(0.1))
+                    .text_color(cx.theme().foreground)
+                    .shadow_xs()
+            })
+            .child(
+                div()
+                    .text_size(px(9.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if selected {
+                        cx.theme().foreground
+                    } else {
+                        cx.theme().muted_foreground.opacity(0.72)
+                    })
+                    .child(segment.label),
+            )
+            .on_click(move |_, _, cx| {
+                app.update(cx, |this, cx| this.set_response_view(segment.mode, cx));
+            })
+    }
+
     fn render_response(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let (formatted_view, keepalive_views) = self.build_formatted_response_views(window, cx);
         let websocket_messages_view = self.build_websocket_messages_view(cx);
@@ -6029,143 +6952,59 @@ impl AlulaApp {
                                 .rounded(px(7.))
                                 .bg(cx.theme().background)
                                 .when(websocket, |this| {
-                                    this.child(
-                                        Button::new("response-messages")
-                                            .custom(mode_button_style)
-                                            .with_size(px(23.))
-                                            .rounded(px(5.))
-                                            .w(px(62.))
-                                            .px_2()
-                                            .selected(messages)
-                                            .when(messages, |this| {
-                                                this.bg(cx.theme().secondary.lighten(0.1))
-                                                    .text_color(cx.theme().foreground)
-                                                    .shadow_xs()
-                                            })
-                                            .child(
-                                                div()
-                                                    .text_size(px(9.))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(if messages {
-                                                        cx.theme().foreground
-                                                    } else {
-                                                        cx.theme().muted_foreground.opacity(0.72)
-                                                    })
-                                                    .child("Messages"),
-                                            )
-                                            .on_click(move |_, _, cx| {
-                                                messages_app.update(cx, |this, cx| {
-                                                    this.set_response_view(
-                                                        ResponseViewMode::Messages,
-                                                        cx,
-                                                    )
-                                                });
-                                            }),
-                                    )
+                                    this.child(Self::response_switch_button(
+                                        ResponseSwitchSegment {
+                                            id: "response-messages",
+                                            label: "Messages",
+                                            width: px(62.),
+                                            mode: ResponseViewMode::Messages,
+                                        },
+                                        messages,
+                                        mode_button_style,
+                                        messages_app,
+                                        cx,
+                                    ))
                                 })
                                 .when(!websocket, |this| {
-                                    this.child(
-                                        Button::new("response-formatted")
-                                            .custom(mode_button_style)
-                                            .with_size(px(23.))
-                                            .rounded(px(5.))
-                                            .w(px(64.))
-                                            .px_2()
-                                            .selected(formatted)
-                                            .when(formatted, |this| {
-                                                this.bg(cx.theme().secondary.lighten(0.1))
-                                                    .text_color(cx.theme().foreground)
-                                                    .shadow_xs()
-                                            })
-                                            .child(
-                                                div()
-                                                    .text_size(px(9.))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(if formatted {
-                                                        cx.theme().foreground
-                                                    } else {
-                                                        cx.theme().muted_foreground.opacity(0.72)
-                                                    })
-                                                    .child("Formatted"),
-                                            )
-                                            .on_click(move |_, _, cx| {
-                                                formatted_app.update(cx, |this, cx| {
-                                                    this.set_response_view(
-                                                        ResponseViewMode::Formatted,
-                                                        cx,
-                                                    )
-                                                });
-                                            }),
-                                    )
+                                    this.child(Self::response_switch_button(
+                                        ResponseSwitchSegment {
+                                            id: "response-formatted",
+                                            label: "Formatted",
+                                            width: px(64.),
+                                            mode: ResponseViewMode::Formatted,
+                                        },
+                                        formatted,
+                                        mode_button_style,
+                                        formatted_app,
+                                        cx,
+                                    ))
                                 })
                                 .when(!websocket, |this| {
-                                    this.child(
-                                        Button::new("response-raw")
-                                            .custom(mode_button_style)
-                                            .with_size(px(23.))
-                                            .rounded(px(5.))
-                                            .w(px(48.))
-                                            .px_2()
-                                            .selected(raw)
-                                            .when(raw, |this| {
-                                                this.bg(cx.theme().secondary.lighten(0.1))
-                                                    .text_color(cx.theme().foreground)
-                                                    .shadow_xs()
-                                            })
-                                            .child(
-                                                div()
-                                                    .text_size(px(9.))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(if raw {
-                                                        cx.theme().foreground
-                                                    } else {
-                                                        cx.theme().muted_foreground.opacity(0.72)
-                                                    })
-                                                    .child("Raw"),
-                                            )
-                                            .on_click(move |_, _, cx| {
-                                                raw_app.update(cx, |this, cx| {
-                                                    this.set_response_view(
-                                                        ResponseViewMode::Raw,
-                                                        cx,
-                                                    )
-                                                });
-                                            }),
-                                    )
+                                    this.child(Self::response_switch_button(
+                                        ResponseSwitchSegment {
+                                            id: "response-raw",
+                                            label: "Raw",
+                                            width: px(48.),
+                                            mode: ResponseViewMode::Raw,
+                                        },
+                                        raw,
+                                        mode_button_style,
+                                        raw_app,
+                                        cx,
+                                    ))
                                 })
-                                .child(
-                                    Button::new("response-headers")
-                                        .custom(mode_button_style)
-                                        .with_size(px(23.))
-                                        .rounded(px(5.))
-                                        .w(px(58.))
-                                        .px_2()
-                                        .selected(headers)
-                                        .when(headers, |this| {
-                                            this.bg(cx.theme().secondary.lighten(0.1))
-                                                .text_color(cx.theme().foreground)
-                                                .shadow_xs()
-                                        })
-                                        .child(
-                                            div()
-                                                .text_size(px(9.))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(if headers {
-                                                    cx.theme().foreground
-                                                } else {
-                                                    cx.theme().muted_foreground.opacity(0.72)
-                                                })
-                                                .child("Headers"),
-                                        )
-                                        .on_click(move |_, _, cx| {
-                                            headers_app.update(cx, |this, cx| {
-                                                this.set_response_view(
-                                                    ResponseViewMode::Headers,
-                                                    cx,
-                                                )
-                                            });
-                                        }),
-                                ),
+                                .child(Self::response_switch_button(
+                                    ResponseSwitchSegment {
+                                        id: "response-headers",
+                                        label: "Headers",
+                                        width: px(58.),
+                                        mode: ResponseViewMode::Headers,
+                                    },
+                                    headers,
+                                    mode_button_style,
+                                    headers_app,
+                                    cx,
+                                )),
                         )
                         .when(websocket, |this| {
                             let active = tab.sending;
@@ -6339,7 +7178,7 @@ impl AlulaApp {
                     )),
                     Animation::new(Duration::from_secs_f64(0.28))
                         .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
-                    |this, delta| this.opacity(delta).top(px(4.) * (1.0 - delta)),
+                    |this, delta| this.opacity(delta),
                 );
             div()
                 .flex_1()
@@ -6573,7 +7412,7 @@ fn empty_state(title: &'static str, subtitle: &'static str, cx: &App) -> Div {
 fn method_badge(method: HttpMethod, cx: &App) -> Div {
     let color = method_color(method, cx);
     div()
-        .w(px(58.))
+        .w(px(52.))
         .h(px(24.))
         .flex_shrink_0()
         .flex()
@@ -6582,7 +7421,7 @@ fn method_badge(method: HttpMethod, cx: &App) -> Div {
         .rounded_full()
         .bg(color.opacity(0.1))
         .font_family(cx.theme().mono_font_family.clone())
-        .text_size(px(9.))
+        .text_size(px(8.))
         .font_weight(FontWeight::BOLD)
         .text_color(color)
         .child(if method == HttpMethod::Delete {
@@ -6590,6 +7429,40 @@ fn method_badge(method: HttpMethod, cx: &App) -> Div {
         } else {
             method.as_str()
         })
+}
+
+fn design_button(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
+    Button::new(id).label(label)
+}
+
+fn design_icon_button(id: impl Into<ElementId>, icon: IconName, label: &'static str) -> Button {
+    Button::new(id).child(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(Icon::new(icon).size(px(12.)))
+            .child(label),
+    )
+}
+
+fn quiet_badge(label: impl Into<SharedString>, cx: &App) -> Div {
+    let label: SharedString = label.into();
+    div()
+        .min_w(px(25.))
+        .h(px(22.))
+        .px(px(7.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().secondary)
+        .font_family(cx.theme().mono_font_family.clone())
+        .text_size(px(9.))
+        .text_color(cx.theme().muted_foreground)
+        .child(label)
 }
 
 fn method_color(method: HttpMethod, cx: &App) -> Hsla {
@@ -6601,6 +7474,28 @@ fn method_color(method: HttpMethod, cx: &App) -> Hsla {
         HttpMethod::Delete => cx.theme().danger,
         HttpMethod::Head | HttpMethod::Options => cx.theme().muted_foreground,
     }
+}
+
+fn ascii_contains_ignore_case(haystack: &str, lowercase_needle: &str) -> bool {
+    if lowercase_needle.is_empty() {
+        return true;
+    }
+    let needle = lowercase_needle.as_bytes();
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn split_history_error(error: &str) -> (String, Option<String>) {
+    if let Some((detail, status)) = error.rsplit_once("HTTP error: ") {
+        let detail = detail.trim().trim_end_matches(':').trim();
+        let status = status.trim();
+        if !detail.is_empty() && !status.is_empty() {
+            return (status.to_owned(), Some(detail.to_owned()));
+        }
+    }
+    (error.to_owned(), None)
 }
 
 fn register_response_languages() {
@@ -6736,18 +7631,48 @@ fn relative_history_time(sent_at_unix_ms: u64) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn install_app_icon() {
+    use objc2::{AnyThread, MainThreadMarker, rc::Retained};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    let icon_bytes = include_bytes!("../assets/app-icon.png");
+    let icon_data =
+        unsafe { NSData::dataWithBytes_length(icon_bytes.as_ptr().cast(), icon_bytes.len()) };
+    let Some(icon): Option<Retained<NSImage>> = NSImage::initWithData(NSImage::alloc(), &icon_data)
+    else {
+        eprintln!("could not decode bundled Alula app icon");
+        return;
+    };
+    let Some(main_thread) = MainThreadMarker::new() else {
+        eprintln!("could not install Alula app icon outside the main thread");
+        return;
+    };
+    unsafe {
+        NSApplication::sharedApplication(main_thread).setApplicationIconImage(Some(&icon));
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn install_app_icon() {}
+
 fn main() -> Result<()> {
     install_tls_crypto_provider();
     let app = Application::new().with_assets(Assets);
     app.run(|cx| {
         gpui_component::init(cx);
-        if let Err(error) = cx
-            .text_system()
-            .add_fonts(vec![Cow::Borrowed(include_bytes!(
-                "../assets/fonts/InterVariable.ttf"
-            ))])
-        {
-            eprintln!("could not load bundled Inter font: {error:#}");
+        install_app_icon();
+        // GPUI 0.2 matches font weights between registered faces but does not
+        // set a variable font's `wght` axis. Register concrete instances so
+        // NORMAL, MEDIUM, SEMIBOLD, and BOLD produce distinct glyphs.
+        if let Err(error) = cx.text_system().add_fonts(vec![
+            Cow::Borrowed(include_bytes!("../assets/fonts/InterRegular.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/InterMedium.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/InterSemiBold.ttf")),
+            Cow::Borrowed(include_bytes!("../assets/fonts/InterBold.ttf")),
+        ]) {
+            eprintln!("could not load bundled Inter font faces: {error:#}");
         }
         let component_bindings = cx.key_bindings().borrow().bindings().cloned().collect();
         cx.set_global(ComponentKeyBindings(component_bindings));

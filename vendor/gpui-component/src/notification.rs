@@ -349,9 +349,8 @@ impl Render for Notification {
                             .opacity(opacity)
                             .when(opacity < 0.85, |this| this.shadow_none())
                     } else {
-                        let y_offset = px(-45.) + delta * px(45.);
                         let opacity = delta;
-                        this.top(px(0.) + y_offset)
+                        this.top_0()
                             .opacity(opacity)
                             .when(opacity < 0.85, |this| this.shadow_none())
                     }

@@ -80,12 +80,14 @@ impl ThemeSection {
 enum ColorKey {
     Background,
     Surface,
+    SurfaceHover,
     Foreground,
     MutedForeground,
     Border,
     Accent,
     AccentForeground,
     Primary,
+    PrimaryHover,
     PrimaryForeground,
     Sidebar,
     SidebarForeground,
@@ -113,15 +115,17 @@ enum ColorKey {
 }
 
 impl ColorKey {
-    const INTERFACE: [Self; 16] = [
+    const INTERFACE: [Self; 18] = [
         Self::Background,
         Self::Surface,
+        Self::SurfaceHover,
         Self::Foreground,
         Self::MutedForeground,
         Self::Border,
         Self::Accent,
         Self::AccentForeground,
         Self::Primary,
+        Self::PrimaryHover,
         Self::PrimaryForeground,
         Self::Sidebar,
         Self::SidebarForeground,
@@ -154,12 +158,14 @@ impl ColorKey {
         match self {
             Self::Background => "Background",
             Self::Surface => "Surface",
+            Self::SurfaceHover => "Surface hover",
             Self::Foreground => "Foreground",
             Self::MutedForeground => "Muted foreground",
             Self::Border => "Border",
             Self::Accent => "Accent",
             Self::AccentForeground => "Accent foreground",
             Self::Primary => "Primary",
+            Self::PrimaryHover => "Primary hover",
             Self::PrimaryForeground => "Primary foreground",
             Self::Sidebar => "Sidebar",
             Self::SidebarForeground => "Sidebar foreground",
@@ -193,12 +199,14 @@ impl ColorKey {
         match self {
             Self::Background => &c.background,
             Self::Surface => &c.surface,
+            Self::SurfaceHover => &c.surface_hover,
             Self::Foreground => &c.foreground,
             Self::MutedForeground => &c.muted_foreground,
             Self::Border => &c.border,
             Self::Accent => &c.accent,
             Self::AccentForeground => &c.accent_foreground,
             Self::Primary => &c.primary,
+            Self::PrimaryHover => &c.primary_hover,
             Self::PrimaryForeground => &c.primary_foreground,
             Self::Sidebar => &c.sidebar,
             Self::SidebarForeground => &c.sidebar_foreground,
@@ -232,12 +240,14 @@ impl ColorKey {
         *match self {
             Self::Background => &mut c.background,
             Self::Surface => &mut c.surface,
+            Self::SurfaceHover => &mut c.surface_hover,
             Self::Foreground => &mut c.foreground,
             Self::MutedForeground => &mut c.muted_foreground,
             Self::Border => &mut c.border,
             Self::Accent => &mut c.accent,
             Self::AccentForeground => &mut c.accent_foreground,
             Self::Primary => &mut c.primary,
+            Self::PrimaryHover => &mut c.primary_hover,
             Self::PrimaryForeground => &mut c.primary_foreground,
             Self::Sidebar => &mut c.sidebar,
             Self::SidebarForeground => &mut c.sidebar_foreground,
@@ -686,71 +696,194 @@ impl SettingsView {
     }
 
     fn render_general(&self, cx: &mut Context<Self>) -> Div {
+        let restore_open_requests = self.working.application.restore_open_requests;
+        let confirm_destructive_actions = self.working.application.confirm_destructive_actions;
+        let restore_app = cx.entity();
+        let confirm_app = cx.entity();
         div()
             .flex()
             .flex_col()
-            .gap_5()
+            .gap_3()
             .child(section_heading(
                 "Configuration",
                 "Choose where Alula stores the settings shared by the app and its agent bridge.",
             ))
             .child(
                 div()
-                    .w(px(507.))
-                    .h(px(58.))
+                    .w_full()
+                    .max_w(px(650.))
+                    .h(px(54.))
                     .flex_shrink_0()
                     .flex()
                     .items_end()
-                    .gap_2()
+                    .gap(px(7.))
                     .child(
                         div()
-                            .w(px(404.))
-                            .flex_shrink_0()
+                            .flex_1()
+                            .min_w_0()
                             .child(field("Configuration file", Input::new(&self.config_file))),
                     )
                     .child(
                         Button::new("choose-config-file")
-                            .outline()
+                            .secondary()
                             .label("Choose…")
                             .on_click(cx.listener(Self::choose_config_file)),
                     ),
             )
             .child(
                 Label::new(format!(
-                    "Current file: {}. Leave this unchanged to keep the platform default.",
+                    "Current file: {}. Leave this unchanged to keep the platform default. Changes take effect after saving.",
                     self.path.display()
                 ))
                 .flex_shrink_0()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground),
+                .text_size(px(9.))
+                .line_height(relative(1.45))
+                .text_color(cx.theme().muted_foreground.opacity(0.68)),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .pt_3()
+                    .flex()
+                    .flex_col()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        settings_control_row(
+                            "Restore open requests",
+                            "Reopen your previous workspace at launch.",
+                            Switch::new("restore-open-requests")
+                                .checked(restore_open_requests)
+                                .on_click(move |checked, _, cx| {
+                                    restore_app.update(cx, |this, cx| {
+                                        this.working.application.restore_open_requests = *checked;
+                                        cx.notify();
+                                    });
+                                }),
+                            true,
+                            cx,
+                        ),
+                    )
+                    .child(settings_control_row(
+                        "Confirm destructive actions",
+                        "Ask before deleting environments and history entries.",
+                        Switch::new("confirm-destructive-actions")
+                            .checked(confirm_destructive_actions)
+                            .on_click(move |checked, _, cx| {
+                                confirm_app.update(cx, |this, cx| {
+                                    this.working.application.confirm_destructive_actions =
+                                        *checked;
+                                    cx.notify();
+                                });
+                            }),
+                        false,
+                        cx,
+                    )),
             )
     }
 
     fn render_agent(&self, cx: &mut Context<Self>) -> Div {
-        let endpoint = format!("http://127.0.0.1:{}/mcp", self.working.agent.port);
+        let start_with_app = self.working.agent.start_with_app;
+        let toggle_app = cx.entity();
+        let restart_app = cx.entity();
         div()
             .flex()
             .flex_col()
-            .gap_5()
+            .gap_3()
             .child(section_heading(
-                "Agent service",
-                "Alula starts a loopback Streamable HTTP MCP server with the desktop app.",
+                "Agent bridge",
+                "Expose typed tools for inspecting, editing, and sending requests from supported agents.",
             ))
             .child(
                 div()
-                    .w(px(280.))
-                    .child(field("Agent port", Input::new(&self.agent_port))),
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .min_h(px(48.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_5()
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(3.))
+                                    .child(div().text_size(px(10.)).child("MCP service"))
+                                    .child(
+                                        div()
+                                            .text_size(px(8.))
+                                            .text_color(
+                                                cx.theme().muted_foreground.opacity(0.68),
+                                            )
+                                            .child(format!(
+                                                "Listening locally on port {}.",
+                                                self.working.agent.port
+                                            )),
+                                    ),
+                            )
+                            .child(settings_status_pill(start_with_app, cx)),
+                    )
+                    .child(settings_control_row(
+                        "Start with Alula",
+                        "Bring the bridge online whenever the app opens.",
+                        Switch::new("agent-start-with-app")
+                            .checked(start_with_app)
+                            .on_click(move |checked, _, cx| {
+                                toggle_app.update(cx, |this, cx| {
+                                    this.working.agent.start_with_app = *checked;
+                                    cx.notify();
+                                });
+                            }),
+                        false,
+                        cx,
+                    )),
             )
             .child(
                 div()
-                    .p_4()
-                    .rounded(cx.theme().radius_lg)
-                    .border_1()
+                    .mt_2()
+                    .pt_3()
+                    .border_t_1()
                     .border_color(cx.theme().border)
-                    .bg(cx.theme().muted)
+                    .flex()
+                    .flex_col()
+                    .gap(px(7.))
                     .child(
-                        Label::new(format!("Endpoint: {endpoint}\nUse an unprivileged port from 1 to 65535. Saving settings restarts the embedded MCP service on the new port."))
-                            .text_sm(),
+                        div()
+                            .text_size(px(10.))
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Local port"),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .max_w(px(650.))
+                            .flex()
+                            .items_center()
+                            .gap(px(7.))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(Input::new(&self.agent_port)),
+                            )
+                            .child(
+                                Button::new("restart-agent-bridge")
+                                    .secondary()
+                                    .label("Restart bridge")
+                                    .on_click(move |_, _, cx| {
+                                        restart_app.update(cx, |this, cx| {
+                                            this.status = Some((
+                                                true,
+                                                "Save settings to restart the bridge.".into(),
+                                            ));
+                                            cx.notify();
+                                        });
+                                    }),
+                            ),
                     ),
             )
     }
@@ -1243,6 +1376,69 @@ fn field(label: &'static str, input: Input) -> Div {
         .gap_2()
         .child(Label::new(label).text_xs().font_weight(FontWeight::MEDIUM))
         .child(input)
+}
+
+fn settings_control_row(
+    title: &'static str,
+    copy: &'static str,
+    toggle: Switch,
+    bordered: bool,
+    cx: &App,
+) -> Div {
+    div()
+        .min_h(px(48.))
+        .flex()
+        .items_center()
+        .justify_between()
+        .gap_5()
+        .when(bordered, |this| {
+            this.border_b_1().border_color(cx.theme().border)
+        })
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .child(div().text_size(px(10.)).child(title))
+                .child(
+                    div()
+                        .text_size(px(8.))
+                        .text_color(cx.theme().muted_foreground.opacity(0.68))
+                        .child(copy),
+                ),
+        )
+        .child(toggle)
+}
+
+fn settings_status_pill(connected: bool, cx: &App) -> Div {
+    let color = if connected {
+        cx.theme().success
+    } else {
+        cx.theme().muted_foreground
+    };
+    div()
+        .h(px(27.))
+        .px(px(9.))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .rounded_full()
+        .border_1()
+        .border_color(if connected {
+            cx.theme().success.opacity(0.24)
+        } else {
+            cx.theme().border
+        })
+        .bg(if connected {
+            cx.theme().success.opacity(0.08)
+        } else {
+            cx.theme().secondary
+        })
+        .font_family(cx.theme().mono_font_family.clone())
+        .text_size(px(10.))
+        .text_color(color)
+        .child(div().size(px(6.)).rounded_full().bg(color))
+        .child(if connected { "Connected" } else { "Stopped" })
 }
 
 fn section_heading(title: &'static str, description: &'static str) -> Div {

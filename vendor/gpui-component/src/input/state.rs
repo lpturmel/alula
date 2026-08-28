@@ -5,10 +5,11 @@
 use anyhow::Result;
 use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
-    Task, UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _, px,
+    EventEmitter, FocusHandle, Focusable, HighlightStyle, InteractiveElement as _, IntoElement,
+    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement as _, Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString,
+    Styled as _, Subscription, Task, UTF16Selection, Window, actions, div, point,
+    prelude::FluentBuilder as _, px,
 };
 use ropey::{Rope, RopeSlice};
 use serde::Deserialize;
@@ -262,6 +263,8 @@ pub struct InputState {
     pub(super) focus_handle: FocusHandle,
     pub(super) mode: InputMode,
     pub(super) text: Rope,
+    /// Additional byte-range styles layered over plain text or syntax highlighting.
+    pub(super) text_highlights: Vec<(Range<usize>, HighlightStyle)>,
     pub(super) text_wrapper: TextWrapper,
     pub(super) history: History<Change>,
     pub(super) blink_cursor: Entity<BlinkCursor>,
@@ -369,6 +372,7 @@ impl InputState {
         Self {
             focus_handle: focus_handle.clone(),
             text: "".into(),
+            text_highlights: Vec::new(),
             text_wrapper: TextWrapper::new(text_style.font(), window.rem_size(), None),
             blink_cursor,
             history,
@@ -467,6 +471,27 @@ impl InputState {
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
         self
+    }
+
+    /// Set additional byte-range styles for the input text.
+    pub fn text_highlights(
+        mut self,
+        highlights: Vec<(Range<usize>, HighlightStyle)>,
+    ) -> Self {
+        self.text_highlights = highlights;
+        self
+    }
+
+    /// Replace the additional byte-range styles for the input text.
+    pub fn set_text_highlights(
+        &mut self,
+        highlights: Vec<(Range<usize>, HighlightStyle)>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.text_highlights != highlights {
+            self.text_highlights = highlights;
+            cx.notify();
+        }
     }
 
     /// Set enable/disable line number, only for [`InputMode::CodeEditor`] mode.

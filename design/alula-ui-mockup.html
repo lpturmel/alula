@@ -76,6 +76,7 @@
     }
 
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     button, input { font: inherit; }
     button { color: inherit; }
     body {
@@ -107,6 +108,7 @@
     }
 
     .app {
+      position: relative;
       width: min(1500px, 100%);
       height: min(920px, 100%);
       min-height: 700px;
@@ -556,6 +558,203 @@
     .response-panel.raw .code { display: none; }
     .response-panel.raw .raw-view { display: block; }
 
+    /* Workspace extensions — the same Quiet velocity language, applied to
+       navigation-heavy surfaces rather than request composition. */
+    .workspace { position: relative; display: block; }
+    .workspace-view {
+      position: absolute;
+      inset: 0;
+      min-width: 0;
+      min-height: 0;
+      display: none;
+    }
+    .requests-view.active { display: grid; grid-template-rows: 42px minmax(0, 1fr); animation: view-in var(--enter) var(--ease-out) both; }
+    .section-view.active { display: flex; flex-direction: column; animation: view-in var(--enter) var(--ease-out) both; }
+    @keyframes view-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+    .section-scroll { min-height: 0; flex: 1; padding: 16px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+    .section-panel { min-height: 100%; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-1); }
+    .section-header { min-height: 66px; padding: 12px 15px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--line); }
+    .section-heading { min-width: 0; }
+    .section-title { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.025em; }
+    .section-copy { margin: 5px 0 0; color: var(--text-3); font-size: 10px; line-height: 1.4; }
+    .section-actions { min-width: 0; display: flex; align-items: center; gap: 7px; }
+
+    .search-field, .settings-input {
+      height: 32px;
+      padding: 0 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      outline: 0;
+      background: var(--app);
+      color: var(--text-1);
+      font-size: 11px;
+      transition: border-color var(--state), box-shadow var(--state), background var(--fast);
+    }
+    .search-field { width: min(280px, 32vw); }
+    .search-field::placeholder, .settings-input::placeholder { color: var(--text-3); }
+    .search-field:focus, .settings-input:focus { border-color: color-mix(in srgb, var(--accent) 70%, var(--line)); box-shadow: 0 0 0 3px var(--accent-soft); background: var(--surface-2); }
+
+    .quiet-badge { min-width: 25px; height: 22px; padding: 0 7px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); color: var(--text-2); font: 9px ui-monospace, monospace; white-space: nowrap; }
+    .primary-button, .outline-button, .danger-button, .text-button {
+      height: 30px;
+      padding: 0 11px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 560;
+      white-space: nowrap;
+      transition: color var(--fast), border-color var(--fast), background var(--fast), transform var(--fast), box-shadow var(--fast);
+    }
+    .primary-button { background: var(--accent); color: #fff; box-shadow: inset 0 1px rgba(255,255,255,.14); }
+    .primary-button:hover { background: var(--accent-hover); transform: translateY(-1px); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 18%, transparent); }
+    .outline-button { border-color: var(--line); background: var(--surface-2); color: var(--text-2); }
+    .outline-button:hover { border-color: var(--line-strong); background: var(--surface-hover); color: var(--text-1); transform: translateY(-1px); }
+    .danger-button { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+    .danger-button:hover { background: color-mix(in srgb, var(--red) 20%, transparent); transform: translateY(-1px); }
+    .text-button { padding: 0 7px; background: transparent; color: var(--text-3); }
+    .text-button:hover { background: var(--surface-hover); color: var(--text-1); }
+    .primary-button:active, .outline-button:active, .danger-button:active { transform: scale(.975); }
+
+    .environment-list, .history-list, .detail-list { min-height: 0; padding: 12px; display: grid; align-content: start; gap: 8px; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+    .environment-card {
+      min-height: 72px;
+      padding: 11px 13px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: var(--app);
+      transition: border-color var(--fast), background var(--fast), transform var(--fast);
+      animation: row-in var(--enter) var(--ease-out) both;
+      animation-delay: calc(var(--row) * 35ms);
+    }
+    .environment-card:hover { border-color: var(--line-strong); background: var(--surface-2); transform: translateY(-1px); }
+    @keyframes row-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .environment-summary { min-width: 0; display: grid; grid-template-columns: 8px 1fr; column-gap: 11px; align-items: center; }
+    .environment-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+    .environment-name { min-width: 0; overflow: hidden; color: var(--text-1); font-size: 13px; font-weight: 610; text-overflow: ellipsis; white-space: nowrap; }
+    .environment-meta { grid-column: 2; margin-top: 5px; display: flex; flex-wrap: wrap; gap: 8px; color: var(--text-3); font-size: 10px; }
+    .environment-meta span + span::before { content: "·"; margin-right: 8px; color: var(--line-strong); }
+    .row-actions { display: flex; align-items: center; gap: 5px; }
+    .empty-filter { display: none; padding: 34px; color: var(--text-3); font-size: 11px; text-align: center; }
+
+    .environment-screen { min-height: 0; flex: 1; display: none; flex-direction: column; }
+    .environment-screen.active { display: flex; animation: content-in var(--state) var(--ease-out) both; }
+    .detail-header { min-height: 64px; padding: 10px 15px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
+    .detail-back { width: 30px; padding: 0; font-size: 15px; }
+    .detail-name { font-size: 14px; font-weight: 630; }
+    .detail-summary { margin-top: 4px; color: var(--text-3); font-size: 10px; }
+    .detail-tabs { height: 42px; padding: 0 14px; display: flex; align-items: stretch; gap: 18px; border-bottom: 1px solid var(--line); }
+    .detail-tab { position: relative; padding: 0 2px; display: flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--text-3); cursor: pointer; font-size: 11px; white-space: nowrap; transition: color var(--fast); }
+    .detail-tab:hover { color: var(--text-2); }
+    .detail-tab.active { color: var(--text-1); }
+    .detail-tab.active::after { content: ""; position: absolute; inset: auto 0 -1px; height: 2px; border-radius: 2px 2px 0 0; background: var(--accent); animation: line-in var(--state) var(--ease-out); }
+    .detail-toolbar { min-height: 48px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .detail-pane { min-height: 0; flex: 1; display: none; flex-direction: column; }
+    .detail-pane.active { display: flex; animation: content-in var(--state) var(--ease-out) both; }
+
+    .request-row, .variable-row, .history-row {
+      min-height: 54px;
+      padding: 8px 11px;
+      display: grid;
+      align-items: center;
+      gap: 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: var(--app);
+      transition: border-color var(--fast), background var(--fast), transform var(--fast);
+    }
+    .request-row { grid-template-columns: 52px minmax(0, 1fr) auto; }
+    .variable-row { grid-template-columns: minmax(150px, .55fr) minmax(220px, 1fr) auto; }
+    .history-row { min-height: 62px; grid-template-columns: 52px minmax(0, 1fr) auto; animation: row-in var(--enter) var(--ease-out) both; animation-delay: calc(var(--row) * 24ms); }
+    .request-row:hover, .variable-row:hover, .history-row:hover { border-color: var(--line-strong); background: var(--surface-2); transform: translateY(-1px); }
+    .method-pill { width: 52px; height: 24px; display: grid; place-items: center; border-radius: 999px; background: var(--green-soft); color: var(--green); font: 8px ui-monospace, monospace; font-weight: 750; }
+    .method-pill.post { background: color-mix(in srgb, var(--cyan) 12%, transparent); color: var(--cyan); }
+    .method-pill.del { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+    .row-primary { min-width: 0; overflow: hidden; font-size: 12px; font-weight: 580; text-overflow: ellipsis; white-space: nowrap; }
+    .row-secondary { margin-top: 4px; overflow: hidden; color: var(--text-3); font: 9px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .variable-key { color: var(--code-key); font: 10px ui-monospace, monospace; }
+    .variable-value { min-width: 0; overflow: hidden; color: var(--text-2); font: 10px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .history-meta { margin-top: 5px; display: flex; flex-wrap: wrap; align-items: center; gap: 9px; color: var(--text-3); font-size: 9px; }
+    .result-pill { padding: 3px 6px; border-radius: 999px; background: var(--green-soft); color: var(--green); font: 8px ui-monospace, monospace; }
+    .result-pill.error { background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+
+    .settings-overlay {
+      position: absolute;
+      z-index: 45;
+      inset: 0;
+      display: grid;
+      grid-template-rows: 51px minmax(0, 1fr) 60px;
+      background: var(--app);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transform: scale(.995);
+      transition: opacity var(--state), transform var(--state) var(--ease-out), visibility 0s var(--state);
+    }
+    .settings-overlay.open { opacity: 1; visibility: visible; pointer-events: auto; transform: none; transition-delay: 0s; }
+    .settings-header { padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); background: var(--surface-1); }
+    .settings-header h2 { margin: 0; font-size: 14px; font-weight: 640; }
+    .settings-main { min-height: 0; padding: 14px; }
+    .settings-frame { height: 100%; min-height: 0; display: grid; grid-template-columns: 190px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface-1); }
+    .settings-nav { padding: 12px 9px; border-right: 1px solid var(--line); background: color-mix(in srgb, var(--surface-1) 82%, var(--app)); }
+    .settings-label { padding: 0 8px 8px; color: var(--text-3); font-size: 8px; font-weight: 720; letter-spacing: .09em; text-transform: uppercase; }
+    .settings-nav-item { width: 100%; min-height: 47px; padding: 7px 9px; display: grid; grid-template-columns: 18px 1fr; align-items: center; gap: 9px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text-2); cursor: pointer; text-align: left; transition: color var(--fast), background var(--fast), transform var(--fast); }
+    .settings-nav-item:hover { color: var(--text-1); background: var(--surface-hover); transform: translateX(1px); }
+    .settings-nav-item.active { color: var(--text-1); background: var(--accent-soft); }
+    .settings-nav-icon { grid-row: 1 / span 2; color: var(--text-3); font: 11px ui-monospace, monospace; text-align: center; }
+    .settings-nav-item.active .settings-nav-icon { color: var(--accent-hover); }
+    .settings-nav-item > span:last-child { min-width: 0; }
+    .settings-nav-title { display: block; font-size: 11px; font-weight: 580; }
+    .settings-nav-copy { margin-top: 3px; overflow: hidden; color: var(--text-3); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .settings-nav-copy { display: block; }
+    .settings-content { min-width: 0; min-height: 0; overflow: auto; }
+    .settings-pane { display: none; min-height: 100%; }
+    .settings-pane.active { display: block; animation: content-in var(--state) var(--ease-out) both; }
+    .settings-pane-head { min-height: 57px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+    .settings-pane-title { font-size: 14px; font-weight: 630; }
+    .settings-pane-copy { margin-top: 5px; color: var(--text-3); font-size: 9px; }
+    .settings-section { padding: 16px; }
+    .settings-section + .settings-section { border-top: 1px solid var(--line); }
+    .settings-section h3 { margin: 0 0 5px; font-size: 12px; font-weight: 620; }
+    .settings-description { margin: 0 0 15px; color: var(--text-3); font-size: 9px; line-height: 1.5; }
+    .settings-field-label { display: block; margin-bottom: 7px; color: var(--text-2); font-size: 10px; }
+    .settings-field-row { display: flex; align-items: center; gap: 7px; }
+    .settings-input { width: min(510px, 72%); font: 10px ui-monospace, monospace; }
+    .settings-hint { margin-top: 11px; color: var(--text-3); font-size: 9px; line-height: 1.45; }
+    .settings-control-row { min-height: 48px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); }
+    .settings-control-row:last-child { border-bottom: 0; }
+    .control-title { font-size: 10px; }
+    .control-copy { margin-top: 3px; color: var(--text-3); font-size: 8px; }
+    .switch { width: 34px; height: 19px; padding: 2px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface-3); cursor: pointer; transition: background var(--fast), border-color var(--fast); }
+    .switch::after { content: ""; display: block; width: 13px; height: 13px; border-radius: 50%; background: var(--text-3); transition: transform var(--state) var(--ease-out), background var(--fast); }
+    .switch.on { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--accent-soft); }
+    .switch.on::after { background: var(--accent); transform: translateX(15px); }
+    .keybinding-list { display: grid; gap: 6px; }
+    .keybinding-row { min-height: 43px; padding: 7px 9px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--app); }
+    .key-combo { padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--surface-2); color: var(--text-2); font: 9px ui-monospace, monospace; box-shadow: 0 1px 0 rgba(255,255,255,.025); }
+    .theme-options { display: flex; flex-wrap: wrap; gap: 8px; }
+    .theme-swatch { width: 86px; padding: 8px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--app); color: var(--text-2); cursor: pointer; font-size: 9px; text-align: left; transition: border-color var(--fast), transform var(--fast); }
+    .theme-swatch::before { content: ""; display: block; height: 24px; margin-bottom: 7px; border-radius: 5px; background: var(--preview); }
+    .theme-swatch:hover, .theme-swatch.active { border-color: var(--accent); transform: translateY(-1px); }
+    .settings-footer { padding: 0 14px; display: flex; align-items: center; justify-content: flex-end; gap: 7px; border-top: 1px solid var(--line); background: var(--surface-1); }
+
+    @media (max-width: 900px) {
+      .section-actions .quiet-badge { display: none; }
+      .search-field { width: 190px; }
+      .settings-frame { grid-template-columns: 158px minmax(0, 1fr); }
+      .settings-nav-copy { display: none; }
+      .variable-row { grid-template-columns: minmax(120px, .55fr) minmax(160px, 1fr) auto; }
+    }
+
     .design-drawer {
       position: fixed;
       z-index: 40;
@@ -684,6 +883,7 @@
         <div class="top-actions">
           <button class="command-button" id="commandOpen"><span>Search or run a command</span><span class="keycap">⌘ K</span></button>
           <span class="status-pill"><span class="status-dot"></span>MCP :37421</span>
+          <button class="icon-button" id="settingsOpen" aria-label="Open settings">⚙</button>
           <button class="icon-button" id="themeToggle" aria-label="Toggle color theme">◐</button>
           <button class="icon-button" id="tokensOpen" aria-label="Open design notes">✦</button>
         </div>
@@ -721,6 +921,7 @@
         </aside>
 
         <section class="workspace">
+          <div class="workspace-view requests-view active" data-workspace-view="Requests">
           <div class="request-tabs" role="tablist" aria-label="Open requests">
             <button class="request-tab active" role="tab" data-method="GET" data-url="https://api.alula.dev/v1/users?limit=20"><span class="tab-method">GET</span><span class="tab-name">List users</span><span class="tab-close">×</span></button>
             <button class="request-tab" role="tab" data-method="POST" data-url="https://api.alula.dev/v1/sessions"><span class="tab-method">POST</span><span class="tab-name">Create session</span><span class="tab-close">×</span></button>
@@ -791,8 +992,167 @@
               </div>
             </section>
           </div>
+          </div>
+
+          <div class="workspace-view section-view" data-workspace-view="Environments">
+            <div class="section-scroll">
+              <section class="section-panel" aria-label="Environments">
+                <div class="environment-screen active" id="environmentIndex">
+                  <header class="section-header">
+                    <div class="section-heading">
+                      <h2 class="section-title">Environments</h2>
+                      <p class="section-copy">Reusable request groups, endpoints, and scoped variables.</p>
+                    </div>
+                    <div class="section-actions">
+                      <input class="search-field" id="environmentSearch" type="search" placeholder="Search environments…" aria-label="Search environments" />
+                      <span class="quiet-badge">2 total</span>
+                      <button class="primary-button" id="newEnvironment">＋ New environment</button>
+                    </div>
+                  </header>
+                  <div class="environment-list" id="environmentList">
+                    <article class="environment-card" data-environment="production" data-search="production api primary" style="--row:0">
+                      <div class="environment-summary">
+                        <span class="environment-dot"></span>
+                        <span class="environment-name">Production API</span>
+                        <div class="environment-meta"><span>8 variables</span><span>26 requests</span><span>Used 14 min ago</span></div>
+                      </div>
+                      <div class="row-actions">
+                        <button class="text-button environment-delete">Delete</button>
+                        <button class="outline-button" data-open-environment="Production API">View</button>
+                      </div>
+                    </article>
+                    <article class="environment-card" data-environment="staging" data-search="staging sandbox preview" style="--row:1">
+                      <div class="environment-summary">
+                        <span class="environment-dot" style="background:var(--cyan);box-shadow:0 0 0 4px color-mix(in srgb,var(--cyan) 12%,transparent)"></span>
+                        <span class="environment-name">Staging Sandbox</span>
+                        <div class="environment-meta"><span>5 variables</span><span>12 requests</span><span>Used yesterday</span></div>
+                      </div>
+                      <div class="row-actions">
+                        <button class="text-button environment-delete">Delete</button>
+                        <button class="outline-button" data-open-environment="Staging Sandbox">View</button>
+                      </div>
+                    </article>
+                    <div class="empty-filter" id="environmentEmpty">No environments match that search.</div>
+                  </div>
+                </div>
+
+                <div class="environment-screen" id="environmentDetail">
+                  <header class="detail-header">
+                    <button class="outline-button detail-back" id="environmentBack" aria-label="Back to environments">←</button>
+                    <div>
+                      <div class="detail-name" id="environmentDetailName">Production API</div>
+                      <div class="detail-summary">26 requests · 8 variables · Active environment</div>
+                    </div>
+                    <button class="danger-button">Delete environment</button>
+                  </header>
+                  <div class="detail-tabs" role="tablist" aria-label="Environment content">
+                    <button class="detail-tab active" data-environment-tab="requests">Requests <span class="tab-count">26</span></button>
+                    <button class="detail-tab" data-environment-tab="variables">Variables <span class="tab-count">8</span></button>
+                  </div>
+
+                  <div class="detail-pane active" data-environment-pane="requests">
+                    <div class="detail-toolbar">
+                      <input class="search-field" type="search" placeholder="Search requests…" aria-label="Search environment requests" />
+                      <button class="primary-button">＋ New request</button>
+                    </div>
+                    <div class="detail-list">
+                      <article class="request-row"><span class="method-pill post">POST</span><div><div class="row-primary">Auth · Login</div><div class="row-secondary">{{api_url}}/v1/auth/login</div></div><button class="outline-button open-environment-request">Open</button></article>
+                      <article class="request-row"><span class="method-pill post">POST</span><div><div class="row-primary">Auth · Register</div><div class="row-secondary">{{api_url}}/v1/auth/register</div></div><button class="outline-button open-environment-request">Open</button></article>
+                      <article class="request-row"><span class="method-pill">GET</span><div><div class="row-primary">Session · Current user</div><div class="row-secondary">{{api_url}}/v1/protected/me</div></div><button class="outline-button open-environment-request">Open</button></article>
+                      <article class="request-row"><span class="method-pill del">DEL</span><div><div class="row-primary">Session · Logout</div><div class="row-secondary">{{api_url}}/v1/protected/logout</div></div><button class="outline-button open-environment-request">Open</button></article>
+                      <article class="request-row"><span class="method-pill">GET</span><div><div class="row-primary">Projects · List</div><div class="row-secondary">{{api_url}}/v1/protected/projects</div></div><button class="outline-button open-environment-request">Open</button></article>
+                      <article class="request-row"><span class="method-pill">GET</span><div><div class="row-primary">Projects · Get</div><div class="row-secondary">{{api_url}}/v1/protected/projects/{{project_id}}</div></div><button class="outline-button open-environment-request">Open</button></article>
+                      <article class="request-row"><span class="method-pill post">POST</span><div><div class="row-primary">Services · Create</div><div class="row-secondary">{{api_url}}/v1/protected/projects/{{project_id}}/services</div></div><button class="outline-button open-environment-request">Open</button></article>
+                    </div>
+                  </div>
+
+                  <div class="detail-pane" data-environment-pane="variables">
+                    <div class="detail-toolbar">
+                      <input class="search-field" type="search" placeholder="Search variables…" aria-label="Search environment variables" />
+                      <button class="primary-button">＋ New variable</button>
+                    </div>
+                    <div class="detail-list">
+                      <article class="variable-row"><span class="variable-key">api_url</span><span class="variable-value">https://api.alula.dev</span><button class="outline-button">Edit</button></article>
+                      <article class="variable-row"><span class="variable-key">access_token</span><span class="variable-value">••••••••••••••••••••••••</span><button class="outline-button">Reveal</button></article>
+                      <article class="variable-row"><span class="variable-key">project_id</span><span class="variable-value">prj_01JY8D3N</span><button class="outline-button">Edit</button></article>
+                      <article class="variable-row"><span class="variable-key">service_id</span><span class="variable-value">svc_01JY9A7K</span><button class="outline-button">Edit</button></article>
+                      <article class="variable-row"><span class="variable-key">region</span><span class="variable-value">ca-central-1</span><button class="outline-button">Edit</button></article>
+                      <article class="variable-row"><span class="variable-key">client_version</span><span class="variable-value">2026-08-24</span><button class="outline-button">Edit</button></article>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="workspace-view section-view" data-workspace-view="History">
+            <div class="section-scroll">
+              <section class="section-panel" aria-label="Request history">
+                <header class="section-header">
+                  <div class="section-heading">
+                    <h2 class="section-title">History</h2>
+                    <p class="section-copy">Persistent request executions; response bodies are not retained.</p>
+                  </div>
+                  <div class="section-actions">
+                    <input class="search-field" id="historySearch" type="search" placeholder="Filter history…" aria-label="Filter history" />
+                    <span class="quiet-badge" id="historyCount">24 entries</span>
+                  </div>
+                </header>
+                <div class="history-list" id="historyList">
+                  <article class="history-row" data-search="logs stream websocket unauthorized" style="--row:0"><span class="method-pill">GET</span><div><div class="row-primary">Logs · Stream</div><div class="history-meta"><span class="result-pill error">401 Unauthorized</span><span>WebSocket handshake failed</span><span>14 min ago</span></div></div><div class="row-actions"><button class="outline-button open-history-request">Open as tab</button><button class="danger-button history-delete">Delete</button></div></article>
+                  <article class="history-row" data-search="users list success" style="--row:1"><span class="method-pill">GET</span><div><div class="row-primary">Users · List</div><div class="history-meta"><span class="result-pill">200 · 184 ms · 1.42 KB</span><span>38 min ago</span></div></div><div class="row-actions"><button class="outline-button open-history-request">Open as tab</button><button class="danger-button history-delete">Delete</button></div></article>
+                  <article class="history-row" data-search="projects list success" style="--row:2"><span class="method-pill">GET</span><div><div class="row-primary">Projects · List</div><div class="history-meta"><span class="result-pill">200 · 30 ms · 543 B</span><span>2 h ago</span></div></div><div class="row-actions"><button class="outline-button open-history-request">Open as tab</button><button class="danger-button history-delete">Delete</button></div></article>
+                  <article class="history-row" data-search="session current user success" style="--row:3"><span class="method-pill">GET</span><div><div class="row-primary">Session · Current user</div><div class="history-meta"><span class="result-pill">200 · 26 ms · 358 B</span><span>8 h ago</span></div></div><div class="row-actions"><button class="outline-button open-history-request">Open as tab</button><button class="danger-button history-delete">Delete</button></div></article>
+                  <article class="history-row" data-search="session create post success" style="--row:4"><span class="method-pill post">POST</span><div><div class="row-primary">Session · Create</div><div class="history-meta"><span class="result-pill">201 · 92 ms · 622 B</span><span>Yesterday</span></div></div><div class="row-actions"><button class="outline-button open-history-request">Open as tab</button><button class="danger-button history-delete">Delete</button></div></article>
+                  <article class="history-row" data-search="token revoke delete success" style="--row:5"><span class="method-pill del">DEL</span><div><div class="row-primary">Token · Revoke</div><div class="history-meta"><span class="result-pill">204 · 44 ms · 0 B</span><span>Yesterday</span></div></div><div class="row-actions"><button class="outline-button open-history-request">Open as tab</button><button class="danger-button history-delete">Delete</button></div></article>
+                  <article class="history-row" data-search="deployments list success" style="--row:6"><span class="method-pill">GET</span><div><div class="row-primary">Deployments · List</div><div class="history-meta"><span class="result-pill">200 · 71 ms · 4.8 KB</span><span>3 days ago</span></div></div><div class="row-actions"><button class="outline-button open-history-request">Open as tab</button><button class="danger-button history-delete">Delete</button></div></article>
+                </div>
+              </section>
+            </div>
+          </div>
         </section>
       </div>
+
+      <section class="settings-overlay" id="settingsOverlay" aria-label="Settings" aria-hidden="true">
+        <header class="settings-header"><h2>Settings</h2><button class="icon-button" id="settingsClose" aria-label="Close settings">×</button></header>
+        <div class="settings-main">
+          <div class="settings-frame">
+            <nav class="settings-nav" aria-label="Settings sections">
+              <div class="settings-label">Preferences</div>
+              <button class="settings-nav-item active" data-settings="general"><span class="settings-nav-icon">⌁</span><span><span class="settings-nav-title">General</span><span class="settings-nav-copy">Files and application behavior</span></span></button>
+              <button class="settings-nav-item" data-settings="agent"><span class="settings-nav-icon">▣</span><span><span class="settings-nav-title">Agent</span><span class="settings-nav-copy">Local MCP service</span></span></button>
+              <button class="settings-nav-item" data-settings="keybindings"><span class="settings-nav-icon">⌘</span><span><span class="settings-nav-title">Keybindings</span><span class="settings-nav-copy">Commands and shortcuts</span></span></button>
+              <button class="settings-nav-item" data-settings="theme"><span class="settings-nav-icon">◉</span><span><span class="settings-nav-title">Theme</span><span class="settings-nav-copy">Interface and syntax colors</span></span></button>
+            </nav>
+
+            <div class="settings-content">
+              <section class="settings-pane active" data-settings-pane="general">
+                <div class="settings-pane-head"><div class="settings-pane-title">General</div><div class="settings-pane-copy">Files and application behavior</div></div>
+                <div class="settings-section"><h3>Configuration</h3><p class="settings-description">Choose where Alula stores settings shared by the app and its agent bridge.</p><label class="settings-field-label" for="configPath">Configuration file</label><div class="settings-field-row"><input class="settings-input" id="configPath" value="/Users/you/.config/alula/config.toml" spellcheck="false" /><button class="outline-button" id="chooseConfig">Choose…</button></div><div class="settings-hint">Leave this unchanged to keep the platform default. Changes take effect after saving.</div></div>
+                <div class="settings-section"><div class="settings-control-row"><div><div class="control-title">Restore open requests</div><div class="control-copy">Reopen your previous workspace at launch.</div></div><button class="switch on" aria-label="Toggle restore open requests"></button></div><div class="settings-control-row"><div><div class="control-title">Confirm destructive actions</div><div class="control-copy">Ask before deleting environments and history entries.</div></div><button class="switch on" aria-label="Toggle destructive action confirmations"></button></div></div>
+              </section>
+
+              <section class="settings-pane" data-settings-pane="agent">
+                <div class="settings-pane-head"><div class="settings-pane-title">Agent</div><div class="settings-pane-copy">Local MCP service and tool access</div></div>
+                <div class="settings-section"><h3>Agent bridge</h3><p class="settings-description">Expose typed tools for inspecting, editing, and sending requests from supported agents.</p><div class="settings-control-row"><div><div class="control-title">MCP service</div><div class="control-copy">Listening locally on port 37421.</div></div><span class="status-pill"><span class="status-dot"></span>Connected</span></div><div class="settings-control-row"><div><div class="control-title">Start with Alula</div><div class="control-copy">Bring the bridge online whenever the app opens.</div></div><button class="switch on" aria-label="Toggle agent auto start"></button></div></div>
+                <div class="settings-section"><label class="settings-field-label" for="agentPort">Local port</label><div class="settings-field-row"><input class="settings-input" id="agentPort" value="37421" inputmode="numeric" /><button class="outline-button">Restart bridge</button></div></div>
+              </section>
+
+              <section class="settings-pane" data-settings-pane="keybindings">
+                <div class="settings-pane-head"><div class="settings-pane-title">Keybindings</div><div class="settings-pane-copy">Commands and shortcuts</div></div>
+                <div class="settings-section"><h3>Workspace</h3><p class="settings-description">Click a shortcut to capture a replacement.</p><div class="keybinding-list"><div class="keybinding-row"><div><div class="control-title">Command palette</div><div class="control-copy">Search and run any command</div></div><button class="key-combo">⌘ K</button></div><div class="keybinding-row"><div><div class="control-title">New request</div><div class="control-copy">Open a fresh request tab</div></div><button class="key-combo">⌘ N</button></div><div class="keybinding-row"><div><div class="control-title">Send request</div><div class="control-copy">Execute the active request</div></div><button class="key-combo">⌘ ↵</button></div><div class="keybinding-row"><div><div class="control-title">Switch environment</div><div class="control-copy">Choose an active environment</div></div><button class="key-combo">⌘ E</button></div></div></div>
+              </section>
+
+              <section class="settings-pane" data-settings-pane="theme">
+                <div class="settings-pane-head"><div class="settings-pane-title">Theme</div><div class="settings-pane-copy">Interface and syntax colors</div></div>
+                <div class="settings-section"><h3>Appearance</h3><p class="settings-description">Choose the base appearance. System follows your macOS setting.</p><div class="theme-options"><button class="theme-swatch active" data-theme-choice="dark" style="--preview:linear-gradient(135deg,#0d0e13 50%,#8c82ff 50%)">Quiet dark</button><button class="theme-swatch" data-theme-choice="light" style="--preview:linear-gradient(135deg,#fafafd 50%,#695eea 50%)">Quiet light</button><button class="theme-swatch" data-theme-choice="dark" style="--preview:linear-gradient(135deg,#111218 60%,#72c7e8 60%)">System</button></div></div>
+                <div class="settings-section"><h3>Syntax preview</h3><p class="settings-description">The editor palette stays low contrast until structure needs emphasis.</p><pre class="body-code"><span class="p">{</span> <span class="k">"environment"</span><span class="p">:</span> <span class="s">"production"</span><span class="p">,</span> <span class="k">"active"</span><span class="p">:</span> <span class="n">true</span> <span class="p">}</span></pre></div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <footer class="settings-footer"><button class="outline-button" id="settingsCancel">Cancel</button><button class="primary-button" id="settingsSave">Save settings</button></footer>
+      </section>
     </section>
   </main>
 
@@ -844,6 +1204,7 @@
         <div class="command-item selected"><span class="nav-icon">↗</span>Send current request<span class="keycap">⌘ ↵</span></div>
         <div class="command-item"><span class="nav-icon">＋</span>Create new request<span class="keycap">⌘ N</span></div>
         <div class="command-item"><span class="nav-icon">◎</span>Switch environment<span class="keycap">⌘ E</span></div>
+        <div class="command-item" id="commandSettings"><span class="nav-icon">⚙</span>Open settings<span class="keycap">⌘ ,</span></div>
         <div class="command-item"><span class="nav-icon">✦</span>Open design notes</div>
       </div>
     </div>
@@ -888,11 +1249,13 @@
       if (event.key === 'Escape') { setCommand(false); drawer.classList.remove('open'); }
     });
 
-    document.querySelectorAll('.nav-item[data-section]').forEach(item => item.addEventListener('click', () => {
-      document.querySelectorAll('.nav-item[data-section]').forEach(other => other.classList.toggle('active', other === item));
-      document.getElementById('breadcrumb').textContent = item.dataset.section;
-      if (item.dataset.section !== 'Requests') showToast(`${item.dataset.section} design follows the same system`);
-    }));
+    function showWorkspace(section) {
+      document.querySelectorAll('.nav-item[data-section]').forEach(item => item.classList.toggle('active', item.dataset.section === section));
+      document.querySelectorAll('[data-workspace-view]').forEach(view => view.classList.toggle('active', view.dataset.workspaceView === section));
+      document.getElementById('breadcrumb').textContent = section;
+    }
+
+    document.querySelectorAll('.nav-item[data-section]').forEach(item => item.addEventListener('click', () => showWorkspace(item.dataset.section)));
 
     document.querySelectorAll('.request-tab').forEach(tab => tab.addEventListener('click', event => {
       if (event.target.classList.contains('tab-close')) return;
@@ -942,6 +1305,84 @@
     document.getElementById('contractsLink').addEventListener('click', event => {
       event.preventDefault();
       showToast('Agent contracts opened');
+    });
+
+    const environmentIndex = document.getElementById('environmentIndex');
+    const environmentDetail = document.getElementById('environmentDetail');
+    document.querySelectorAll('[data-open-environment]').forEach(button => button.addEventListener('click', () => {
+      document.getElementById('environmentDetailName').textContent = button.dataset.openEnvironment;
+      environmentIndex.classList.remove('active');
+      environmentDetail.classList.add('active');
+    }));
+    document.getElementById('environmentBack').addEventListener('click', () => {
+      environmentDetail.classList.remove('active');
+      environmentIndex.classList.add('active');
+    });
+
+    document.querySelectorAll('[data-environment-tab]').forEach(tab => tab.addEventListener('click', () => {
+      document.querySelectorAll('[data-environment-tab]').forEach(other => other.classList.toggle('active', other === tab));
+      document.querySelectorAll('[data-environment-pane]').forEach(pane => pane.classList.toggle('active', pane.dataset.environmentPane === tab.dataset.environmentTab));
+    }));
+
+    document.getElementById('environmentSearch').addEventListener('input', event => {
+      const query = event.currentTarget.value.trim().toLowerCase();
+      let visible = 0;
+      document.querySelectorAll('.environment-card').forEach(card => {
+        const matches = card.dataset.search.includes(query);
+        card.hidden = !matches;
+        if (matches) visible += 1;
+      });
+      document.getElementById('environmentEmpty').style.display = visible ? 'none' : 'block';
+    });
+
+    document.getElementById('newEnvironment').addEventListener('click', () => showToast('New environment flow opened'));
+    document.querySelectorAll('.environment-delete').forEach(button => button.addEventListener('click', () => showToast('Environment delete confirmation opened')));
+    document.querySelectorAll('.open-environment-request').forEach(button => button.addEventListener('click', () => {
+      showWorkspace('Requests');
+      showToast('Request opened in a new tab');
+    }));
+
+    document.getElementById('historySearch').addEventListener('input', event => {
+      const query = event.currentTarget.value.trim().toLowerCase();
+      document.querySelectorAll('.history-row').forEach(row => { row.hidden = !row.dataset.search.includes(query); });
+    });
+    document.querySelectorAll('.open-history-request').forEach(button => button.addEventListener('click', () => {
+      showWorkspace('Requests');
+      showToast('History request opened as a tab');
+    }));
+    document.querySelectorAll('.history-delete').forEach(button => button.addEventListener('click', () => {
+      const row = button.closest('.history-row');
+      row.style.opacity = '0';
+      row.style.transform = 'translateX(5px)';
+      setTimeout(() => row.remove(), 180);
+      showToast('History entry deleted');
+    }));
+
+    const settingsOverlay = document.getElementById('settingsOverlay');
+    function setSettings(open) {
+      settingsOverlay.classList.toggle('open', open);
+      settingsOverlay.setAttribute('aria-hidden', String(!open));
+    }
+    document.getElementById('settingsOpen').addEventListener('click', () => setSettings(true));
+    document.getElementById('settingsClose').addEventListener('click', () => setSettings(false));
+    document.getElementById('settingsCancel').addEventListener('click', () => setSettings(false));
+    document.getElementById('settingsSave').addEventListener('click', () => { setSettings(false); showToast('Settings saved'); });
+    document.getElementById('commandSettings').addEventListener('click', () => { setCommand(false); setSettings(true); });
+    document.getElementById('chooseConfig').addEventListener('click', () => showToast('Configuration file picker opened'));
+
+    document.querySelectorAll('[data-settings]').forEach(item => item.addEventListener('click', () => {
+      document.querySelectorAll('[data-settings]').forEach(other => other.classList.toggle('active', other === item));
+      document.querySelectorAll('[data-settings-pane]').forEach(pane => pane.classList.toggle('active', pane.dataset.settingsPane === item.dataset.settings));
+    }));
+    document.querySelectorAll('.switch').forEach(toggle => toggle.addEventListener('click', () => toggle.classList.toggle('on')));
+    document.querySelectorAll('[data-theme-choice]').forEach(choice => choice.addEventListener('click', () => {
+      document.querySelectorAll('[data-theme-choice]').forEach(other => other.classList.toggle('active', other === choice));
+      root.dataset.theme = choice.dataset.themeChoice;
+    }));
+
+    document.addEventListener('keydown', event => {
+      if ((event.metaKey || event.ctrlKey) && event.key === ',') { event.preventDefault(); setSettings(true); }
+      if (event.key === 'Escape' && settingsOverlay.classList.contains('open')) setSettings(false);
     });
   </script>
 </body>

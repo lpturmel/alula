@@ -236,12 +236,13 @@ impl RenderOnce for Sheet {
                                 "slide",
                                 Animation::new(Duration::from_secs_f64(0.15)),
                                 move |this, delta| {
-                                    let y = px(-100.) + delta * px(100.);
-                                    this.map(|this| match placement {
-                                        Placement::Top => this.top(y),
-                                        Placement::Right => this.right(y),
-                                        Placement::Bottom => this.bottom(y),
-                                        Placement::Left => this.left(y),
+                                    // Animate paint only; the sheet's interactive hitbox must
+                                    // not move between mouse-down and mouse-up.
+                                    this.opacity(delta).map(|this| match placement {
+                                        Placement::Top => this.top_0(),
+                                        Placement::Right => this.right_0(),
+                                        Placement::Bottom => this.bottom_0(),
+                                        Placement::Left => this.left_0(),
                                     })
                                 },
                             ),

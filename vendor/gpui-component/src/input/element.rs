@@ -743,40 +743,52 @@ impl TextElement {
         let state = self.state.read(cx);
         let text = &state.text;
         let is_multi_line = state.mode.is_multi_line();
+        let custom_highlights = &state.text_highlights;
 
         let (highlighter, diagnostics) = match &state.mode {
             InputMode::CodeEditor {
                 highlighter,
                 diagnostics,
                 ..
-            } => (highlighter.borrow(), diagnostics),
-            _ => return None,
+            } => (Some(highlighter.borrow()), Some(diagnostics)),
+            _ if custom_highlights.is_empty() => return None,
+            _ => (None, None),
         };
-        let highlighter = highlighter.as_ref()?;
 
         let mut offset = visible_byte_range.start;
-        let mut styles = vec![];
+        let mut styles = vec![(visible_byte_range.clone(), HighlightStyle::default())];
 
-        for line in text
-            .iter_lines()
-            .skip(visible_range.start)
-            .take(visible_range.len())
-        {
-            let line_len = if is_multi_line {
-                // +1 for `\n`
-                line.len() + 1
-            } else {
-                line.len()
-            };
+        if let Some(highlighter) = highlighter.as_ref().and_then(|value| value.as_ref()) {
+            for line in text
+                .iter_lines()
+                .skip(visible_range.start)
+                .take(visible_range.len())
+            {
+                let line_len = if is_multi_line {
+                    // +1 for `\n`
+                    line.len() + 1
+                } else {
+                    line.len()
+                };
 
-            let range = offset..offset + line_len;
-            let line_styles = highlighter.styles(&range, &cx.theme().highlight_theme);
-            styles = gpui::combine_highlights(styles, line_styles).collect();
+                let range = offset..offset + line_len;
+                let line_styles = highlighter.styles(&range, &cx.theme().highlight_theme);
+                styles = gpui::combine_highlights(styles, line_styles).collect();
 
-            offset = range.end;
+                offset = range.end;
+            }
         }
 
-        let diagnostic_styles = diagnostics.styles_for_range(&visible_byte_range, cx);
+        let visible_custom_highlights = custom_highlights.iter().filter_map(|(range, style)| {
+            let start = range.start.max(visible_byte_range.start);
+            let end = range.end.min(visible_byte_range.end);
+            (start < end).then_some((start..end, *style))
+        });
+        styles = gpui::combine_highlights(styles, visible_custom_highlights).collect();
+
+        let diagnostic_styles = diagnostics
+            .map(|diagnostics| diagnostics.styles_for_range(&visible_byte_range, cx))
+            .unwrap_or_default();
 
         // hover definition style
         if let Some(hover_style) = self.layout_hover_definition(cx) {

@@ -2,9 +2,9 @@ use std::{rc::Rc, time::Duration};
 
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, Bounds, BoxShadow, ClickEvent, Div, Edges,
-    FocusHandle, Hsla, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement,
-    Pixels, Point, RenderOnce, SharedString, StyleRefinement, Styled, Window, anchored, div, hsla,
-    point, prelude::FluentBuilder, px, relative,
+    FocusHandle, Hsla, InteractiveElement, IntoElement, KeyBinding, MouseButton,
+    ParentElement, Pixels, Point, RenderOnce, SharedString, StyleRefinement, Styled, Window,
+    anchored, div, hsla, point, prelude::FluentBuilder, px, relative,
 };
 use rust_i18n::t;
 
@@ -526,7 +526,6 @@ impl RenderOnce for Dialog {
                                 )
                             })
                             .with_animation("slide-down", animation.clone(), move |this, delta| {
-                                let y_offset = px(0.) + delta * px(30.);
                                 // This is equivalent to `shadow_xl` with an extra opacity.
                                 let shadow = vec![
                                     BoxShadow {
@@ -542,7 +541,10 @@ impl RenderOnce for Dialog {
                                         spread_radius: px(-6.),
                                     },
                                 ];
-                                this.top(y + y_offset).shadow(shadow)
+                                // Keep the dialog's hitbox at its settled position while
+                                // fading the shadow in. Moving it during entry can invalidate
+                                // a mouse-down before the matching mouse-up arrives.
+                                this.top(y + px(30.)).shadow(shadow)
                             }),
                     )
                     .with_animation("fade-in", animation, move |this, delta| this.opacity(delta)),

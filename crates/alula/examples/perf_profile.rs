@@ -29,6 +29,7 @@ fn main() {
         "clone" => profile_clone(multiplier),
         "save" => profile_save(multiplier),
         "fixture" => write_fixture(),
+        "ui-fixture" => write_ui_fixture(),
         "all" => {
             profile_format(multiplier);
             profile_variables(multiplier);
@@ -38,7 +39,7 @@ fn main() {
         }
         _ => {
             eprintln!(
-                "usage: perf_profile [all|format|format-legacy|variables|variables-legacy|startup|clone|save|fixture <config-path>]"
+                "usage: perf_profile [all|format|format-legacy|variables|variables-legacy|startup|clone|save|fixture <config-path>|ui-fixture <config-path> [item-count]]"
             );
             process::exit(2);
         }
@@ -63,6 +64,51 @@ fn write_fixture() {
         .save(&StatePaths::beside(&path))
         .expect("benchmark state should save");
     println!("wrote performance fixture beside {}", path.display());
+}
+
+fn write_ui_fixture() {
+    let path = env::args()
+        .nth(2)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| benchmark_directory().join("config.toml"));
+    let item_count = env::args()
+        .nth(3)
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(10_000);
+    AppConfig::default()
+        .save(&path)
+        .expect("large-list UI config should save");
+
+    let workspace_requests = (0..100)
+        .map(|index| make_request(index, ""))
+        .collect::<Vec<_>>();
+    let workspace = Workspace {
+        active_request_id: workspace_requests[0].id.clone(),
+        requests: workspace_requests,
+    };
+    let mut environment = Environment::new("Large list QA");
+    environment.variables = (0..item_count)
+        .map(|index| EnvironmentVariable::public(format!("value_{index}"), index.to_string()))
+        .collect();
+    environment.requests = (0..item_count)
+        .map(|index| make_request(100_000 + index, ""))
+        .collect();
+    let state = PersistedState {
+        workspace,
+        history: HistoryStore::default(),
+        environments: EnvironmentStore {
+            version: 1,
+            environments: vec![environment],
+        },
+    };
+    state
+        .save(&StatePaths::beside(&path))
+        .expect("large-list UI state should save");
+    println!(
+        "wrote {item_count} variables and {item_count} environment requests beside {}",
+        path.display()
+    );
 }
 
 fn profile_format_legacy(multiplier: usize) {

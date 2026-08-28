@@ -1,13 +1,15 @@
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
 use crate::{
     ActiveTheme, Colorize as _, Disableable, FocusableExt as _, Icon, IconName, Selectable,
-    Sizable, Size, StyleSized, StyledExt, h_flex, spinner::Spinner, tooltip::Tooltip,
+    Sizable, Size, StyledExt, animation::cubic_bezier, h_flex, spinner::Spinner,
+    tooltip::Tooltip,
 };
 use gpui::{
-    Action, AnyElement, App, ClickEvent, Corners, Div, Edges, ElementId, Hsla, InteractiveElement,
-    Interactivity, IntoElement, MouseButton, ParentElement, Pixels, RenderOnce, SharedString,
-    Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    Action, Animation, AnimationExt as _, AnyElement, App, ClickEvent, Corners, Div, Edges,
+    ElementId, FontWeight, Hsla, InteractiveElement, Interactivity, IntoElement, MouseButton,
+    MouseClickEvent, MouseDownEvent, ParentElement, Pixels, RenderOnce, SharedString, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px, relative,
 };
 
@@ -43,6 +45,11 @@ pub trait ButtonVariants: Sized {
     /// With the primary style for the Button.
     fn primary(self) -> Self {
         self.with_variant(ButtonVariant::Primary)
+    }
+
+    /// With the standard outlined surface style for the Button.
+    fn secondary(self) -> Self {
+        self.with_variant(ButtonVariant::Secondary)
     }
 
     /// With the danger style for the Button.
@@ -169,7 +176,7 @@ impl ButtonVariant {
 
     #[inline]
     fn no_padding(&self) -> bool {
-        self.is_link() || self.is_text()
+        self.is_link()
     }
 }
 
@@ -226,7 +233,7 @@ impl Button {
             disabled: false,
             selected: false,
             variant: ButtonVariant::default(),
-            rounded: ButtonRounded::Medium,
+            rounded: ButtonRounded::Size(px(6.)),
             border_corners: Corners::all(true),
             border_edges: Edges::all(true),
             size: Size::Medium,
@@ -426,8 +433,43 @@ impl RenderOnce for Button {
         let style: ButtonVariant = self.variant;
         let clickable = self.clickable();
         let is_disabled = self.disabled;
+        let has_click_handler = self.on_click.is_some();
+        let is_unavailable = self.disabled || self.loading;
         let hoverable = self.hoverable();
+        let external_on_hover = self.on_hover.clone();
+        let motion_id = self.id.clone();
+        let motion_state = window.use_keyed_state(
+            SharedString::from(format!("button-motion:{motion_id:?}")),
+            cx,
+            |_, _| ButtonMotionState::default(),
+        );
+        let motion_hovered = motion_state.read(cx).hovered;
+        let animates_on_hover = match style {
+            ButtonVariant::Primary
+            | ButtonVariant::Secondary
+            | ButtonVariant::Danger
+            | ButtonVariant::Info
+            | ButtonVariant::Success
+            | ButtonVariant::Warning => true,
+            ButtonVariant::Custom(colors) => colors.color.a > 0. || colors.border.a > 0.,
+            ButtonVariant::Ghost | ButtonVariant::Link | ButtonVariant::Text => false,
+        };
         let normal_style = style.normal(self.outline, cx);
+        let text_size = match self.size {
+            Size::XSmall => px(9.),
+            Size::Small => px(10.),
+            Size::Large => px(12.),
+            Size::Medium | Size::Size(_) => px(11.),
+        };
+        let label_text_size = self
+            .style
+            .text
+            .as_ref()
+            .and_then(|text| text.font_size)
+            .unwrap_or_else(|| text_size.into());
+        // Button labels use one global weight so every variant, size, and future
+        // button has the same typography throughout the application.
+        let label_font_weight = FontWeight::BOLD;
         let icon_size = match self.size {
             Size::Size(v) => Size::Size(v * 0.75),
             _ => self.size,
@@ -455,13 +497,15 @@ impl RenderOnce for Button {
                         .tab_stop(self.tab_stop),
                 )
             })
-            .cursor_default()
             .flex()
             .flex_shrink_0()
             .items_center()
             .justify_center()
             .cursor_default()
-            .when(self.variant.is_link(), |this| this.cursor_pointer())
+            .when(clickable, |this| this.cursor_pointer())
+            .when(has_click_handler && is_unavailable, |this| {
+                this.cursor_not_allowed()
+            })
             .when(cx.theme().shadow && normal_style.shadow, |this| {
                 this.shadow_xs()
             })
@@ -478,12 +522,22 @@ impl RenderOnce for Button {
                     // Normal Button
                     match self.size {
                         Size::Size(size) => this.px(size * 0.2),
-                        Size::XSmall => this.h_5().px_1(),
-                        Size::Small => this.h_6().px_3().when(self.compact, |this| this.px_1p5()),
-                        _ => this.h_8().px_4().when(self.compact, |this| this.px_2()),
+                        Size::XSmall => this
+                            .h(px(22.))
+                            .px(if self.compact { px(5.) } else { px(7.) }),
+                        Size::Small => this
+                            .h(px(27.))
+                            .px(if self.compact { px(6.) } else { px(8.) }),
+                        Size::Medium => this
+                            .h(px(30.))
+                            .px(if self.compact { px(8.) } else { px(11.) }),
+                        Size::Large => this
+                            .h(px(36.))
+                            .px(if self.compact { px(10.) } else { px(14.) }),
                     }
                 }
             })
+            .when(style.is_text(), |this| this.px(px(7.)))
             .when(self.border_corners.top_left, |this| {
                 this.rounded_tl(rounding)
             })
@@ -531,33 +585,78 @@ impl RenderOnce for Button {
                     .border_color(disabled_style.border)
                     .shadow_none()
             })
+            .text_size(text_size)
             .refine_style(&self.style)
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            // Apply shared typography after per-instance refinements so a
+            // button cannot accidentally downgrade its label back to normal.
+            .font_family(cx.theme().font_family.clone())
+            .font_weight(FontWeight::BOLD)
+            .on_mouse_down(MouseButton::Left, {
+                let motion_state = motion_state.clone();
+                move |event, window, cx| {
                 // Stop handle any click event when disabled.
                 // To avoid handle dropdown menu open when button is disabled.
-                if is_disabled {
+                if is_unavailable {
                     cx.stop_propagation();
                     return;
                 }
 
                 // Avoid focus on mouse down.
                 window.prevent_default();
+                if clickable {
+                    motion_state.update(cx, |state, _| {
+                        state.pressed = Some(event.clone());
+                    });
+                }
+            }
             })
             .when_some(self.on_click, |this, on_click| {
-                this.on_click(move |event, window, cx| {
-                    // Stop handle any click event when disabled.
-                    // To avoid handle dropdown menu open when button is disabled.
-                    if !clickable {
-                        cx.stop_propagation();
-                        return;
-                    }
-
-                    (on_click)(event, window, cx);
-                })
+                let mouse_on_click = on_click.clone();
+                let keyboard_on_click = on_click.clone();
+                let mouse_up_state = motion_state.clone();
+                let mouse_out_state = motion_state.clone();
+                this
+                    .on_mouse_up(MouseButton::Left, move |event, window, cx| {
+                        let mouse_down = mouse_up_state.update(cx, |state, _| {
+                            state.pressed.take()
+                        });
+                        if let Some(mouse_down) = mouse_down {
+                            mouse_on_click(
+                                &ClickEvent::Mouse(MouseClickEvent {
+                                    down: mouse_down,
+                                    up: event.clone(),
+                                }),
+                                window,
+                                cx,
+                            );
+                        }
+                    })
+                    .on_mouse_up_out(MouseButton::Left, move |_, _, cx| {
+                        mouse_out_state.update(cx, |state, _| {
+                            state.pressed = None;
+                        });
+                    })
+                    // Retain GPUI's synthesized click only for keyboard
+                    // activation. Mouse activation is handled above so it
+                    // survives harmless rerenders between press and release.
+                    .on_click(move |event, window, cx| {
+                        if matches!(event, ClickEvent::Keyboard(_)) {
+                            keyboard_on_click(event, window, cx);
+                        }
+                    })
             })
-            .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
+            .when(!self.disabled && (clickable || hoverable), |this| {
+                let motion_state = motion_state.clone();
                 this.on_hover(move |hovered, window, cx| {
-                    (on_hover)(hovered, window, cx);
+                    motion_state.update(cx, |state, cx| {
+                        if state.hovered != *hovered {
+                            state.hovered = *hovered;
+                            cx.notify();
+                        }
+                    });
+                    if let Some(on_hover) = &external_on_hover {
+                        (on_hover)(hovered, window, cx);
+                    }
                 })
             })
             .child({
@@ -565,7 +664,12 @@ impl RenderOnce for Button {
                     .id("label")
                     .items_center()
                     .justify_center()
-                    .button_text_size(self.size)
+                    // Keep typography on the stable label node. Inheriting it only
+                    // from the interactive parent lets GPUI's hover/active rebuild
+                    // fall back to the application font metrics after a click.
+                    .text_size(label_text_size)
+                    .font_family(cx.theme().font_family.clone())
+                    .font_weight(label_font_weight)
                     .map(|this| match self.size {
                         Size::XSmall => this.gap_1(),
                         Size::Small => this.gap_1(),
@@ -609,7 +713,28 @@ impl RenderOnce for Button {
                 })
             })
             .focus_ring(is_focused, px(0.), window, cx)
+            .map(|this| {
+                if !animates_on_hover || is_disabled {
+                    return this.into_any_element();
+                }
+                let start = if motion_hovered { 0.96 } else { 1.0 };
+                this.with_animation(
+                    SharedString::from(format!(
+                        "button-hover:{motion_id:?}:{motion_hovered}"
+                    )),
+                    Animation::new(Duration::from_secs_f64(0.12))
+                        .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
+                    move |this, delta| this.opacity(start + (1.0 - start) * delta),
+                )
+                .into_any_element()
+            })
     }
+}
+
+#[derive(Default)]
+struct ButtonMotionState {
+    hovered: bool,
+    pressed: Option<MouseDownEvent>,
 }
 
 struct ButtonVariantStyle {
@@ -629,7 +754,7 @@ impl ButtonVariant {
         match self {
             ButtonVariant::Primary => cx.theme().primary,
             ButtonVariant::Secondary => cx.theme().secondary,
-            ButtonVariant::Danger => cx.theme().danger,
+            ButtonVariant::Danger => cx.theme().danger.opacity(0.12),
             ButtonVariant::Warning => cx.theme().warning,
             ButtonVariant::Success => cx.theme().success,
             ButtonVariant::Info => cx.theme().info,
@@ -649,14 +774,10 @@ impl ButtonVariant {
                     cx.theme().primary_foreground
                 }
             }
-            ButtonVariant::Secondary | ButtonVariant::Ghost => cx.theme().secondary_foreground,
-            ButtonVariant::Danger => {
-                if outline {
-                    cx.theme().danger
-                } else {
-                    cx.theme().danger_foreground
-                }
-            }
+            ButtonVariant::Secondary => cx.theme().muted_foreground,
+            ButtonVariant::Text => cx.theme().muted_foreground.opacity(0.68),
+            ButtonVariant::Ghost => cx.theme().secondary_foreground,
+            ButtonVariant::Danger => cx.theme().danger,
             ButtonVariant::Warning => {
                 if outline {
                     cx.theme().warning
@@ -679,7 +800,6 @@ impl ButtonVariant {
                 }
             }
             ButtonVariant::Link => cx.theme().link,
-            ButtonVariant::Text => cx.theme().foreground,
             ButtonVariant::Custom(colors) => {
                 if outline {
                     colors.color
@@ -692,13 +812,7 @@ impl ButtonVariant {
 
     fn border_color(&self, bg: Hsla, outline: bool, cx: &mut App) -> Hsla {
         match self {
-            ButtonVariant::Secondary => {
-                if outline {
-                    cx.theme().border
-                } else {
-                    bg
-                }
-            }
+            ButtonVariant::Secondary => cx.theme().border,
             ButtonVariant::Primary => {
                 if outline {
                     cx.theme().primary
@@ -706,13 +820,7 @@ impl ButtonVariant {
                     bg
                 }
             }
-            ButtonVariant::Danger => {
-                if outline {
-                    cx.theme().danger
-                } else {
-                    bg
-                }
-            }
+            ButtonVariant::Danger => cx.theme().transparent,
             ButtonVariant::Info => {
                 if outline {
                     cx.theme().info
@@ -782,13 +890,7 @@ impl ButtonVariant {
                 }
             }
             ButtonVariant::Secondary => cx.theme().secondary_hover,
-            ButtonVariant::Danger => {
-                if outline {
-                    cx.theme().secondary_hover
-                } else {
-                    cx.theme().danger_hover
-                }
-            }
+            ButtonVariant::Danger => cx.theme().danger.opacity(0.20),
             ButtonVariant::Warning => {
                 if outline {
                     cx.theme().secondary_hover
@@ -818,7 +920,7 @@ impl ButtonVariant {
                 }
             }
             ButtonVariant::Link => cx.theme().transparent,
-            ButtonVariant::Text => cx.theme().transparent,
+            ButtonVariant::Text => cx.theme().secondary_hover,
             ButtonVariant::Custom(colors) => {
                 if outline {
                     cx.theme().secondary_hover
@@ -828,9 +930,19 @@ impl ButtonVariant {
             }
         };
 
-        let border = self.border_color(bg, outline, cx);
+        let border = match self {
+            ButtonVariant::Secondary => {
+                if cx.theme().mode.is_dark() {
+                    cx.theme().border.lighten(0.30)
+                } else {
+                    cx.theme().border.darken(0.08)
+                }
+            }
+            _ => self.border_color(bg, outline, cx),
+        };
         let fg = match self {
             ButtonVariant::Link => cx.theme().link_hover,
+            ButtonVariant::Secondary | ButtonVariant::Text => cx.theme().foreground,
             _ => self.text_color(outline, cx),
         };
 
@@ -863,13 +975,7 @@ impl ButtonVariant {
                     cx.theme().secondary.darken(0.2).opacity(0.8)
                 }
             }
-            ButtonVariant::Danger => {
-                if outline {
-                    cx.theme().danger_active.opacity(0.1)
-                } else {
-                    cx.theme().danger_active
-                }
-            }
+            ButtonVariant::Danger => cx.theme().danger.opacity(0.26),
             ButtonVariant::Warning => {
                 if outline {
                     cx.theme().warning_active.opacity(0.1)
@@ -892,7 +998,7 @@ impl ButtonVariant {
                 }
             }
             ButtonVariant::Link => cx.theme().transparent,
-            ButtonVariant::Text => cx.theme().transparent,
+            ButtonVariant::Text => cx.theme().secondary_active,
             ButtonVariant::Custom(colors) => {
                 if outline {
                     colors.active.opacity(0.1)
@@ -904,7 +1010,7 @@ impl ButtonVariant {
         let border = self.border_color(bg, outline, cx);
         let fg = match self {
             ButtonVariant::Link => cx.theme().link_active,
-            ButtonVariant::Text => cx.theme().foreground.opacity(0.7),
+            ButtonVariant::Text => cx.theme().foreground,
             _ => self.text_color(outline, cx),
         };
         let underline = self.underline(cx);
@@ -923,7 +1029,7 @@ impl ButtonVariant {
         let bg = match self {
             ButtonVariant::Primary => cx.theme().primary_active,
             ButtonVariant::Secondary | ButtonVariant::Ghost => cx.theme().secondary_active,
-            ButtonVariant::Danger => cx.theme().danger_active,
+            ButtonVariant::Danger => cx.theme().danger.opacity(0.26),
             ButtonVariant::Warning => cx.theme().warning_active,
             ButtonVariant::Success => cx.theme().success_active,
             ButtonVariant::Info => cx.theme().info_active,

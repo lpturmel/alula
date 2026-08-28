@@ -48,6 +48,10 @@ pub struct ApplicationSettings {
     /// Empty means the platform default. A non-empty value is also used as a
     /// redirect when Alula starts from its default configuration file.
     pub config_path: String,
+    /// Reopen the request tabs that were present when Alula last closed.
+    pub restore_open_requests: bool,
+    /// Ask for confirmation before permanently deleting saved data.
+    pub confirm_destructive_actions: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -55,6 +59,8 @@ pub struct ApplicationSettings {
 pub struct AgentSettings {
     /// Reserved loopback port for Alula's agent/MCP service.
     pub port: u16,
+    /// Start the local MCP bridge with the desktop app.
+    pub start_with_app: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -286,12 +292,14 @@ pub struct ThemeSettings {
 pub struct ThemePalette {
     pub background: String,
     pub surface: String,
+    pub surface_hover: String,
     pub foreground: String,
     pub muted_foreground: String,
     pub border: String,
     pub accent: String,
     pub accent_foreground: String,
     pub primary: String,
+    pub primary_hover: String,
     pub primary_foreground: String,
     pub sidebar: String,
     pub sidebar_foreground: String,
@@ -340,13 +348,18 @@ impl Default for ApplicationSettings {
     fn default() -> Self {
         Self {
             config_path: String::new(),
+            restore_open_requests: true,
+            confirm_destructive_actions: true,
         }
     }
 }
 
 impl Default for AgentSettings {
     fn default() -> Self {
-        Self { port: 37_421 }
+        Self {
+            port: 37_421,
+            start_with_app: true,
+        }
     }
 }
 
@@ -393,12 +406,14 @@ impl Default for ThemePalette {
         Self {
             background: "#0D0E13".into(),
             surface: "#171820".into(),
+            surface_hover: "#22232D".into(),
             foreground: "#F3F3F6".into(),
             muted_foreground: "#A7A8B2".into(),
             border: "#282A34".into(),
             accent: "#8C82FF1F".into(),
             accent_foreground: "#F3F3F6".into(),
             primary: "#8C82FF".into(),
+            primary_hover: "#9C94FF".into(),
             primary_foreground: "#FFFFFF".into(),
             sidebar: "#111218".into(),
             sidebar_foreground: "#A7A8B2".into(),
@@ -633,17 +648,17 @@ impl AppConfig {
         colors.tab_foreground = color(&palette.muted_foreground);
         colors.list = color(&palette.background);
         colors.list_head = color(&palette.surface);
-        colors.list_hover = color(&palette.surface);
+        colors.list_hover = color(&palette.surface_hover);
         colors.title_bar = color(&palette.surface);
         colors.title_bar_border = color(&palette.border);
         colors.caret = colors.primary.clone();
         colors.ring = colors.primary.clone();
         colors.link = colors.primary.clone();
         colors.progress_bar = colors.primary.clone();
-        colors.primary_hover = colors.primary.clone();
+        colors.primary_hover = color(&palette.primary_hover);
         colors.primary_active = colors.primary.clone();
-        colors.secondary_hover = colors.accent.clone();
-        colors.secondary_active = colors.accent.clone();
+        colors.secondary_hover = color(&palette.surface_hover);
+        colors.secondary_active = color(&palette.surface_hover);
         colors.list_active = colors.accent.clone();
         colors.list_active_border = colors.primary.clone();
 
@@ -694,12 +709,14 @@ impl AppConfig {
         vec![
             ("theme.colors.background", &c.background),
             ("theme.colors.surface", &c.surface),
+            ("theme.colors.surface_hover", &c.surface_hover),
             ("theme.colors.foreground", &c.foreground),
             ("theme.colors.muted_foreground", &c.muted_foreground),
             ("theme.colors.border", &c.border),
             ("theme.colors.accent", &c.accent),
             ("theme.colors.accent_foreground", &c.accent_foreground),
             ("theme.colors.primary", &c.primary),
+            ("theme.colors.primary_hover", &c.primary_hover),
             ("theme.colors.primary_foreground", &c.primary_foreground),
             ("theme.colors.sidebar", &c.sidebar),
             ("theme.colors.sidebar_foreground", &c.sidebar_foreground),
@@ -1027,10 +1044,16 @@ mod tests {
     fn validates_agent_port_and_round_trips_application_settings() {
         let mut config = AppConfig::default();
         config.agent.port = 45_678;
+        config.agent.start_with_app = false;
         config.application.config_path = "/tmp/alula-custom.toml".into();
+        config.application.restore_open_requests = false;
+        config.application.confirm_destructive_actions = false;
         let decoded = AppConfig::from_toml(&config.to_toml().unwrap()).unwrap();
         assert_eq!(decoded.agent.port, 45_678);
+        assert!(!decoded.agent.start_with_app);
         assert_eq!(decoded.application.config_path, "/tmp/alula-custom.toml");
+        assert!(!decoded.application.restore_open_requests);
+        assert!(!decoded.application.confirm_destructive_actions);
 
         config.agent.port = 0;
         assert!(config.validate().is_err());
