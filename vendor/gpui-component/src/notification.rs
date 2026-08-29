@@ -451,7 +451,8 @@ impl Render for NotificationList {
         div().absolute().top_4().right_4().child(
             v_flex()
                 .id("notification-list")
-                .h(size.height - px(8.))
+                .h(size.height - px(32.))
+                .justify_end()
                 .on_hover(cx.listener(|view, hovered, _, cx| {
                     view.expanded = *hovered;
                     cx.notify()

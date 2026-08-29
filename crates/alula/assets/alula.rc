@@ -1,0 +1,4 @@
+#define RT_MANIFEST 24
+
+1 ICON "assets/app-icon.ico"
+1 RT_MANIFEST "assets/alula.exe.manifest"

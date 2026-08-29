@@ -7,6 +7,7 @@ default-run = "alula"
 
 [dependencies]
 anyhow = "1"
+base64 = "0.22"
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 gpui-component = "0.5.1"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -29,3 +30,6 @@ url = "2"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSImage", "NSResponder"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["NSData"] }
+
+[build-dependencies]
+embed-resource = "3.0"

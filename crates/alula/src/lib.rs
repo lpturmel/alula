@@ -24,7 +24,8 @@ pub use config::{
 };
 pub use format::{
     CachedFormattedBody, FormattedBody, ResponseBodyCache, chunked_fenced_code_blocks,
-    fenced_code_block, format_response_body, syntax_language, trim_response_formatting_start,
+    fenced_code_block, format_request_body, format_response_body, syntax_language,
+    trim_response_formatting_start,
 };
 pub use http::{HttpExecutor, HttpSession, HttpStreamEvent};
 pub use mcp::{

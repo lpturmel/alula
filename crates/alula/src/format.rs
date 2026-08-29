@@ -243,17 +243,44 @@ pub fn format_response_body(body: &str, content_type: Option<&str>) -> Formatted
     FormattedBody { text, language }
 }
 
+/// Formats an editable request body while reporting invalid or unsupported
+/// input instead of silently returning it unchanged.
+pub fn format_request_body(
+    body: &str,
+    content_type: Option<&str>,
+) -> Result<FormattedBody, String> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Err("the request body is empty".into());
+    }
+    let language = syntax_language(content_type, body);
+    let text = match language {
+        "json" => format_json_result(body)?,
+        "html" | "xml" => format_markup(body),
+        "css" | "javascript" => format_braced_source(body),
+        _ => {
+            return Err("the body format could not be detected; add a Content-Type header".into());
+        }
+    };
+    Ok(FormattedBody { text, language })
+}
+
 /// Pretty-print JSON directly from the parser into the output buffer. This
 /// avoids building a complete `serde_json::Value` tree and then walking it a
 /// second time, substantially reducing allocations for large responses.
 fn format_json(body: &str) -> Option<String> {
+    format_json_result(body).ok()
+}
+
+fn format_json_result(body: &str) -> Result<String, String> {
     let mut deserializer = serde_json::Deserializer::from_str(body);
     let mut output = Vec::with_capacity(body.len().saturating_add(body.len() / 2));
     let formatter = serde_json::ser::PrettyFormatter::with_indent(b"  ");
     let mut serializer = serde_json::Serializer::with_formatter(&mut output, formatter);
-    serde_transcode::transcode(&mut deserializer, &mut serializer).ok()?;
-    deserializer.end().ok()?;
-    String::from_utf8(output).ok()
+    serde_transcode::transcode(&mut deserializer, &mut serializer)
+        .map_err(|error| error.to_string())?;
+    deserializer.end().map_err(|error| error.to_string())?;
+    String::from_utf8(output).map_err(|error| error.to_string())
 }
 
 fn looks_like_json(body: &str) -> bool {
@@ -470,6 +497,27 @@ mod tests {
             format_response_body(r#"{"ok":true,"items":[1,2]}"#, Some("application/json"));
         assert_eq!(formatted.language, "json");
         assert!(formatted.text.contains("\n  \"ok\": true"));
+    }
+
+    #[test]
+    fn formats_request_json_and_reports_invalid_input() {
+        let formatted =
+            format_request_body(r#"{"ok":true,"items":[1,2]}"#, Some("application/json")).unwrap();
+        assert_eq!(formatted.language, "json");
+        assert_eq!(
+            formatted.text,
+            "{\n  \"ok\": true,\n  \"items\": [\n    1,\n    2\n  ]\n}"
+        );
+
+        let error = format_request_body(r#"{"ok":}"#, Some("application/json")).unwrap_err();
+        assert!(!error.is_empty());
+    }
+
+    #[test]
+    fn request_formatter_detects_json_without_a_content_type() {
+        let formatted = format_request_body("[1,2]", None).unwrap();
+        assert_eq!(formatted.language, "json");
+        assert_eq!(formatted.text, "[\n  1,\n  2\n]");
     }
 
     #[test]

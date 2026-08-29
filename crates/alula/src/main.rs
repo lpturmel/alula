@@ -1,4 +1,5 @@
 #![recursion_limit = "256"]
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use alula::{
     AddHeader, AddParameter, AgentReply, AppConfig, CloseTab, CopyResponseBody, CreateNew,
@@ -96,6 +97,8 @@ impl AssetSource for Assets {
             "icons/bot.svg" => Some(include_bytes!("../assets/icons/bot.svg")),
             "icons/check.svg" => Some(include_bytes!("../assets/icons/check.svg")),
             "icons/chevron-down.svg" => Some(include_bytes!("../assets/icons/chevron-down.svg")),
+            "icons/circle-check.svg" => Some(include_bytes!("../assets/icons/circle-check.svg")),
+            "icons/circle-x.svg" => Some(include_bytes!("../assets/icons/circle-x.svg")),
             "icons/close.svg" => Some(include_bytes!("../assets/icons/close.svg")),
             "icons/copy.svg" => Some(include_bytes!("../assets/icons/copy.svg")),
             "icons/delete.svg" => Some(include_bytes!("../assets/icons/delete.svg")),
@@ -103,6 +106,7 @@ impl AssetSource for Assets {
             "icons/folder.svg" => Some(include_bytes!("../assets/icons/folder.svg")),
             "icons/folder-open.svg" => Some(include_bytes!("../assets/icons/folder-open.svg")),
             "icons/globe.svg" => Some(include_bytes!("../assets/icons/globe.svg")),
+            "icons/info.svg" => Some(include_bytes!("../assets/icons/info.svg")),
             "icons/loader-circle.svg" => Some(include_bytes!("../assets/icons/loader-circle.svg")),
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             "icons/palette.svg" => Some(include_bytes!("../assets/icons/palette.svg")),
@@ -133,6 +137,8 @@ impl AssetSource for Assets {
             "bot.svg",
             "check.svg",
             "chevron-down.svg",
+            "circle-check.svg",
+            "circle-x.svg",
             "close.svg",
             "copy.svg",
             "delete.svg",
@@ -140,6 +146,7 @@ impl AssetSource for Assets {
             "folder.svg",
             "folder-open.svg",
             "globe.svg",
+            "info.svg",
             "loader-circle.svg",
             "plus.svg",
             "palette.svg",
@@ -341,13 +348,28 @@ fn active_tab_index_after_close(active: usize, closing: usize, tab_count: usize)
 #[cfg(test)]
 mod command_palette_tests {
     use super::{
-        HttpStreamEvent, PaletteCommand, RequestDestination, RequestStreamEvent, Rope,
+        Assets, HttpStreamEvent, PaletteCommand, RequestDestination, RequestStreamEvent, Rope,
         active_tab_index_after_close, ascii_contains_ignore_case, formatting_stream_chunk,
         next_palette_index, open_variable_at_cursor, open_variable_at_rope_cursor,
         previous_palette_index, push_stream_event_batch, redact_secret_values, split_history_error,
         template_visual_state, variable_completion_context_at_cursor,
         variable_completion_insert_text,
     };
+
+    #[test]
+    fn semantic_notification_icons_are_bundled() {
+        for path in [
+            "icons/circle-check.svg",
+            "icons/circle-x.svg",
+            "icons/info.svg",
+            "icons/triangle-alert.svg",
+        ] {
+            assert!(
+                gpui::AssetSource::load(&Assets, path).unwrap().is_some(),
+                "missing {path}"
+            );
+        }
+    }
 
     #[test]
     fn command_filtering_is_case_insensitive_and_matches_labels() {
@@ -3153,6 +3175,126 @@ impl AlulaApp {
         });
     }
 
+    fn open_import_environment_dialog(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let share_string = cx.new(|cx| {
+            InputState::new(window, cx)
+                .multi_line(true)
+                .soft_wrap(true)
+                .placeholder("alula-env-v1:…")
+        });
+        let save_share_string = share_string.clone();
+        let dialog_share_string = share_string.clone();
+        let app = cx.entity();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            dialog
+                .title(Label::new("Import environment").font_weight(FontWeight::SEMIBOLD))
+                .w(px(560.))
+                .bg(cx.theme().muted)
+                .border_color(cx.theme().muted_foreground.opacity(0.32))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            Label::new(
+                                "Paste an Alula environment share string. Requests, folders, and public variables will be imported; secret values must be entered again.",
+                            )
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .h(px(150.))
+                                .child(Input::new(&dialog_share_string).size_full()),
+                        ),
+                )
+                .confirm()
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text("Import environment")
+                        .cancel_text("Cancel")
+                        .cancel_variant(ButtonVariant::Secondary),
+                )
+                .on_ok({
+                    let app = app.clone();
+                    let save_share_string = save_share_string.clone();
+                    move |_, window, cx| {
+                        let source = save_share_string.read(cx).value().to_string();
+                        match alula::Environment::from_share_string(&source) {
+                            Ok(environment) => {
+                                let name = environment.name.clone();
+                                let environment_id = environment.id.clone();
+                                app.update(cx, |this, cx| {
+                                    this.environments.environments.push(environment);
+                                    this.selected_environment_id = Some(environment_id);
+                                    this.persistence_dirty.store(true, Ordering::Release);
+                                    cx.notify();
+                                });
+                                window.push_notification(
+                                    Notification::success(format!(
+                                        "Imported environment “{name}”"
+                                    )),
+                                    cx,
+                                );
+                                true
+                            }
+                            Err(error) => {
+                                window.push_notification(
+                                    Notification::error(format!(
+                                        "Could not import environment: {error:#}"
+                                    )),
+                                    cx,
+                                );
+                                false
+                            }
+                        }
+                    }
+                })
+        });
+        share_string.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    fn export_environment(
+        &mut self,
+        environment_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = self.workspace_snapshot(cx);
+        self.environments.sync_open_requests(&workspace.requests);
+        let Some(environment) = self
+            .environments
+            .environments
+            .iter()
+            .find(|environment| environment.id == environment_id)
+        else {
+            window.push_notification(Notification::error("Environment not found"), cx);
+            return;
+        };
+        match environment.to_share_string() {
+            Ok(share_string) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(share_string));
+                window.push_notification(
+                    Notification::success(format!(
+                        "Copied “{}” share string to the clipboard",
+                        environment.name
+                    )),
+                    cx,
+                );
+            }
+            Err(error) => window.push_notification(
+                Notification::error(format!("Could not export environment: {error:#}")),
+                cx,
+            ),
+        }
+    }
+
     fn open_environment_folder_dialog(
         &mut self,
         environment_id: String,
@@ -4081,6 +4223,55 @@ impl AlulaApp {
     fn select_section(&mut self, section: EditorSection, cx: &mut Context<Self>) {
         self.tabs[self.active_tab].section = section;
         cx.notify();
+    }
+
+    fn format_active_request_body(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = &self.tabs[self.active_tab];
+        let body_input = tab.body.clone();
+        let source = body_input.read(cx).value().to_string();
+        let content_type = tab.headers.iter().find_map(|header| {
+            (header.enabled
+                && header
+                    .key
+                    .read(cx)
+                    .value()
+                    .trim()
+                    .eq_ignore_ascii_case("content-type"))
+            .then(|| header.value.read(cx).value().trim().to_owned())
+        });
+
+        match alula::format_request_body(&source, content_type.as_deref()) {
+            Ok(formatted) if formatted.text == source => {
+                window.push_notification(
+                    Notification::info(format!(
+                        "The {} request body is already formatted",
+                        formatted.language.to_ascii_uppercase()
+                    )),
+                    cx,
+                );
+            }
+            Ok(formatted) => {
+                let language = formatted.language.to_ascii_uppercase();
+                body_input.update(cx, |input, cx| {
+                    input.set_value(formatted.text, window, cx);
+                });
+                self.persistence_dirty.store(true, Ordering::Release);
+                window.push_notification(
+                    Notification::success(format!("Formatted {language} request body")),
+                    cx,
+                );
+                cx.notify();
+            }
+            Err(error) => window.push_notification(
+                Notification::error(format!("Could not format request body: {error}")),
+                cx,
+            ),
+        }
     }
 
     fn add_pair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -6036,6 +6227,8 @@ impl AlulaApp {
     ) -> Div {
         let app = cx.entity();
         let back_app = app.clone();
+        let export_app = app.clone();
+        let export_id = environment.id.clone();
         let delete_app = app.clone();
         let delete_id = environment.id.clone();
         let delete_name = environment.name.clone();
@@ -6163,19 +6356,39 @@ impl AlulaApp {
                                 ),
                         )
                         .child(
-                            design_button("delete-environment-detail", "Delete environment")
+                            div()
                                 .ml_auto()
-                                .danger()
-                                .on_click(move |_, window, cx| {
-                                    delete_app.update(cx, |this, cx| {
-                                        this.confirm_delete_environment(
-                                            delete_id.clone(),
-                                            delete_name.clone(),
-                                            window,
-                                            cx,
-                                        )
-                                    });
-                                }),
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .child(
+                                    design_button("export-environment-detail", "Export")
+                                        .secondary()
+                                        .on_click(move |_, window, cx| {
+                                            export_app.update(cx, |this, cx| {
+                                                this.export_environment(&export_id, window, cx)
+                                            });
+                                        }),
+                                )
+                                .child(
+                                    design_button(
+                                        "delete-environment-detail",
+                                        "Delete environment",
+                                    )
+                                    .danger()
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            delete_app.update(cx, |this, cx| {
+                                                this.confirm_delete_environment(
+                                                    delete_id.clone(),
+                                                    delete_name.clone(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            });
+                                        },
+                                    ),
+                                ),
                         ),
                 )
                 .child(
@@ -6630,6 +6843,13 @@ impl AlulaApp {
                                     format!("{} total", self.environments.environments.len()),
                                     cx,
                                 ))
+                                .child(
+                                    design_button("import-environment", "Import")
+                                        .secondary()
+                                        .on_click(
+                                            cx.listener(Self::open_import_environment_dialog),
+                                        ),
+                                )
                                 .child(
                                     design_icon_button(
                                         "new-environment",
@@ -7279,45 +7499,74 @@ impl AlulaApp {
         let tab = &self.tabs[self.active_tab];
         let body = tab.body.clone();
         let state = &tab.body_template_state;
-        div().flex_1().min_h_0().overflow_hidden().p_3().child(
-            div()
-                .relative()
-                .size_full()
-                .when(state.error.is_some(), |this| {
-                    this.border_1()
-                        .border_color(cx.theme().danger.opacity(0.7))
-                        .rounded(cx.theme().radius)
-                })
-                .child(Input::new(&body).size_full())
-                .when(state.is_valid(), |this| {
-                    this.child(
-                        div()
-                            .absolute()
-                            .top_2()
-                            .right_2()
-                            .px_2()
-                            .py_0p5()
-                            .rounded_full()
-                            .bg(cx.theme().primary.opacity(0.14))
-                            .text_color(cx.theme().primary)
-                            .text_xs()
-                            .child("Variables"),
+        div()
+            .flex_1()
+            .min_h_0()
+            .overflow_hidden()
+            .p_3()
+            .pt_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .h(px(26.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .child(
+                        Label::new("Auto-detects JSON, HTML, XML, CSS, or JavaScript")
+                            .text_size(px(9.))
+                            .text_color(cx.theme().muted_foreground.opacity(0.68)),
                     )
-                })
-                .when_some(state.error.clone(), |this, message| {
-                    this.child(
-                        Button::new("body-variable-error")
-                            .absolute()
-                            .top_2()
-                            .right_2()
-                            .ghost()
+                    .child(
+                        design_button("format-request-body", "Format body")
+                            .ml_auto()
                             .small()
-                            .compact()
-                            .icon(IconName::TriangleAlert)
-                            .tooltip(message),
-                    )
-                }),
-        )
+                            .secondary()
+                            .on_click(cx.listener(Self::format_active_request_body)),
+                    ),
+            )
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .when(state.error.is_some(), |this| {
+                        this.border_1()
+                            .border_color(cx.theme().danger.opacity(0.7))
+                            .rounded(cx.theme().radius)
+                    })
+                    .child(Input::new(&body).size_full())
+                    .when(state.is_valid(), |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .top_2()
+                                .right_2()
+                                .px_2()
+                                .py_0p5()
+                                .rounded_full()
+                                .bg(cx.theme().primary.opacity(0.14))
+                                .text_color(cx.theme().primary)
+                                .text_xs()
+                                .child("Variables"),
+                        )
+                    })
+                    .when_some(state.error.clone(), |this, message| {
+                        this.child(
+                            Button::new("body-variable-error")
+                                .absolute()
+                                .top_2()
+                                .right_2()
+                                .ghost()
+                                .small()
+                                .compact()
+                                .icon(IconName::TriangleAlert)
+                                .tooltip(message),
+                        )
+                    }),
+            )
     }
 
     fn render_pairs(&self, cx: &mut Context<Self>) -> Div {

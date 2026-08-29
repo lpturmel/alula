@@ -8,12 +8,22 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize, Serializer, de::DeserializeOwned, ser::SerializeStruct};
 
 use crate::model::{RequestDraft, ResponseSnapshot, Workspace, next_id};
 
 pub const STATE_VERSION: u32 = 1;
 pub const MAX_HISTORY_ENTRIES: usize = 500;
+const ENVIRONMENT_SHARE_PREFIX: &str = "alula-env-v1:";
+const ENVIRONMENT_SHARE_VERSION: u32 = 1;
+const MAX_ENVIRONMENT_SHARE_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Serialize, Deserialize)]
+struct EnvironmentSharePayload {
+    version: u32,
+    environment: Environment,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Environment {
@@ -38,6 +48,61 @@ impl Environment {
             requests: Vec::new(),
             folders: Vec::new(),
             variables: Vec::new(),
+        }
+    }
+
+    /// Encodes this environment, including its folder tree and saved request
+    /// snapshots, as a versioned string suitable for copying between Alula
+    /// installations. Secret variable values are omitted by the variable's
+    /// serializer; only their names and secret marker are shared.
+    pub fn to_share_string(&self) -> Result<String> {
+        let payload = EnvironmentSharePayload {
+            version: ENVIRONMENT_SHARE_VERSION,
+            environment: self.clone(),
+        };
+        let json = serde_json::to_vec(&payload).context("failed to serialize environment")?;
+        Ok(format!(
+            "{ENVIRONMENT_SHARE_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(json)
+        ))
+    }
+
+    /// Decodes a shared environment and assigns fresh IDs to every imported
+    /// object so the result can safely coexist with the source environment.
+    pub fn from_share_string(source: &str) -> Result<Self> {
+        let source = source.trim();
+        let encoded = source
+            .strip_prefix(ENVIRONMENT_SHARE_PREFIX)
+            .ok_or_else(|| anyhow!("not an Alula environment share string"))?;
+        if encoded.len() > MAX_ENVIRONMENT_SHARE_BYTES {
+            anyhow::bail!("environment share string is too large");
+        }
+        let json = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .context("environment share string is not valid")?;
+        let payload: EnvironmentSharePayload =
+            serde_json::from_slice(&json).context("environment share data is not valid")?;
+        if payload.version != ENVIRONMENT_SHARE_VERSION {
+            anyhow::bail!("unsupported environment share version {}", payload.version);
+        }
+        let mut environment = payload.environment;
+        environment.regenerate_ids();
+        Ok(environment)
+    }
+
+    fn regenerate_ids(&mut self) {
+        self.id = next_id("environment");
+        for request in &mut self.requests {
+            regenerate_request_ids(request);
+        }
+        for folder in &mut self.folders {
+            folder.regenerate_ids();
+        }
+        for variable in &mut self.variables {
+            variable.id = next_id("variable");
+            if variable.secret {
+                variable.value = None;
+            }
         }
     }
 
@@ -176,6 +241,16 @@ impl EnvironmentFolder {
         }
     }
 
+    fn regenerate_ids(&mut self) {
+        self.id = next_id("folder");
+        for request in &mut self.requests {
+            regenerate_request_ids(request);
+        }
+        for folder in &mut self.folders {
+            folder.regenerate_ids();
+        }
+    }
+
     pub fn request_count(&self) -> usize {
         self.requests.len()
             + self
@@ -306,6 +381,17 @@ impl EnvironmentFolder {
         self.folders
             .iter_mut()
             .find_map(|folder| folder.delete_descendant(folder_id))
+    }
+}
+
+fn regenerate_request_ids(request: &mut RequestDraft) {
+    request.id = next_id("request");
+    for field in request
+        .parameters
+        .iter_mut()
+        .chain(request.headers.iter_mut())
+    {
+        field.id = next_id("field");
     }
 }
 
@@ -913,6 +999,53 @@ variables = []
 "#;
         let store: EnvironmentStore = toml::from_str(source).unwrap();
         assert!(store.environments[0].folders.is_empty());
+    }
+
+    #[test]
+    fn environment_share_string_round_trips_requests_folders_and_variables() {
+        let mut environment = Environment::new("Production");
+        environment.variables.push(EnvironmentVariable::public(
+            "api_url",
+            "https://example.com",
+        ));
+        environment.variables.push(EnvironmentVariable::secret(
+            "token",
+            Some("do-not-share".into()),
+        ));
+        let mut folder = EnvironmentFolder::new("Authentication");
+        let mut request = RequestDraft::default();
+        request.name = "Sign in".into();
+        request.url = "{{api_url}}/login".into();
+        folder.requests.push(request);
+        environment.folders.push(folder);
+
+        let original_environment_id = environment.id.clone();
+        let original_folder_id = environment.folders[0].id.clone();
+        let original_request_id = environment.folders[0].requests[0].id.clone();
+        let encoded = environment.to_share_string().unwrap();
+        let imported = Environment::from_share_string(&encoded).unwrap();
+
+        assert!(encoded.starts_with(ENVIRONMENT_SHARE_PREFIX));
+        assert!(!encoded.contains("do-not-share"));
+        assert_eq!(imported.name, "Production");
+        assert_eq!(imported.folder_paths()[0].1, "Authentication");
+        assert_eq!(imported.folders[0].requests[0].name, "Sign in");
+        assert_eq!(imported.folders[0].requests[0].url, "{{api_url}}/login");
+        assert_eq!(
+            imported.variables[0].value.as_deref(),
+            Some("https://example.com")
+        );
+        assert!(imported.variables[1].secret);
+        assert_eq!(imported.variables[1].value, None);
+        assert_ne!(imported.id, original_environment_id);
+        assert_ne!(imported.folders[0].id, original_folder_id);
+        assert_ne!(imported.folders[0].requests[0].id, original_request_id);
+    }
+
+    #[test]
+    fn environment_share_string_rejects_invalid_input() {
+        assert!(Environment::from_share_string("not-a-share-string").is_err());
+        assert!(Environment::from_share_string("alula-env-v1:not-base64!").is_err());
     }
 
     #[test]

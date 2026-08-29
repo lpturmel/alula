@@ -18,6 +18,18 @@ Run it on macOS or Linux with:
 cargo run -p alula
 ```
 
+## Releases
+
+Pushing a version tag such as `v0.1.1` runs the desktop release workflow. The
+tag must match the workspace version in `Cargo.toml`. GitHub Releases receives
+a native ARM64 macOS `.app` archive and a Windows x64 archive, together with a
+SHA-256 file for each. The macOS bundle carries Alula's `.icns`; the Windows
+executable embeds the multi-resolution `.ico` and application manifest.
+
+The macOS build is ad-hoc signed so the bundle is internally consistent, but
+it is not notarized with an Apple Developer identity. The workflow can also be
+run manually for an existing tag from the Actions page.
+
 The crate enables GPUI's `runtime_shaders` feature on macOS, so development
 builds do not require the optional Xcode Metal Toolchain download.
 
