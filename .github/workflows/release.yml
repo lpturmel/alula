@@ -174,9 +174,73 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  linux:
+    name: Build Linux x64
+    needs: metadata
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Install Linux build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            build-essential \
+            clang \
+            cmake \
+            libfontconfig1-dev \
+            libvulkan1 \
+            libwayland-dev \
+            libx11-xcb-dev \
+            libxkbcommon-x11-dev \
+            pkg-config
+
+      - name: Select stable Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Test and build release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "x86_64" ]]
+          # Integration tests build the normal binary in the same release graph.
+          cargo test --release --locked -p alula
+          test -x target/release/alula
+          file target/release/alula | grep -Eq 'ELF 64-bit.*x86-64'
+
+      - name: Package and checksum
+        shell: bash
+        env:
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          archive="Alula-${VERSION}-Linux-x86_64.tar.gz"
+          package="dist/Alula"
+          mkdir -p "$package"
+          install -m 0755 target/release/alula "$package/alula"
+          install -m 0644 README.md "$package/README.md"
+          tar -C dist -czf "dist/$archive" Alula
+          (cd dist && sha256sum "$archive" > "$archive.sha256")
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-x86_64
+          path: |
+            dist/Alula-*-Linux-x86_64.tar.gz
+            dist/Alula-*-Linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
   publish:
     name: Publish GitHub Release
-    needs: [metadata, macos, windows]
+    needs: [metadata, macos, windows, linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -192,8 +256,8 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t assets < <(find dist -maxdepth 1 -type f -print | sort)
-          if [[ "${#assets[@]}" -ne 4 ]]; then
-            echo "Expected two archives and two checksums; found ${#assets[@]} files" >&2
+          if [[ "${#assets[@]}" -ne 6 ]]; then
+            echo "Expected three archives and three checksums; found ${#assets[@]} files" >&2
             printf '%s\n' "${assets[@]}" >&2
             exit 1
           fi

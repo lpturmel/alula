@@ -93,7 +93,13 @@ version = "2.1.0"
 
 [dependencies.gpui]
 version = "0.2.2"
-features = ["runtime_shaders"]
+default-features = false
+features = [
+    "font-kit",
+    "runtime_shaders",
+    "wayland",
+    "x11",
+]
 
 [dependencies.gpui-component-macros]
 version = "0.5.1"
