@@ -192,6 +192,7 @@ jobs:
             build-essential \
             clang \
             cmake \
+            libdbus-1-dev \
             libfontconfig1-dev \
             libvulkan1 \
             libwayland-dev \
