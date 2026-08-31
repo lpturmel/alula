@@ -542,9 +542,9 @@ mod command_palette_tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_application_menu_exposes_the_quit_action() {
+    fn macos_application_menu_exposes_native_edit_actions() {
         let menus = macos_app_menu();
-        assert_eq!(menus.len(), 1);
+        assert_eq!(menus.len(), 2);
         assert_eq!(menus[0].name.as_ref(), "Alula");
 
         let gpui::MenuItem::Action { name, action, .. } = menus[0].items.last().unwrap() else {
@@ -552,6 +552,47 @@ mod command_palette_tests {
         };
         assert_eq!(name.as_ref(), "Quit Alula");
         assert!(action.as_any().is::<QuitApplication>());
+
+        assert_eq!(menus[1].name.as_ref(), "Edit");
+        let [cut, copy, paste] = menus[1].items.as_slice() else {
+            panic!("expected Cut, Copy, and Paste in the Edit menu");
+        };
+
+        let gpui::MenuItem::Action {
+            name,
+            action,
+            os_action: Some(os_action),
+        } = cut
+        else {
+            panic!("expected Cut to be a native menu action");
+        };
+        assert_eq!(name.as_ref(), "Cut");
+        assert!(action.as_any().is::<gpui_component::input::Cut>());
+        assert!(*os_action == gpui::OsAction::Cut);
+
+        let gpui::MenuItem::Action {
+            name,
+            action,
+            os_action: Some(os_action),
+        } = copy
+        else {
+            panic!("expected Copy to be a native menu action");
+        };
+        assert_eq!(name.as_ref(), "Copy");
+        assert!(action.as_any().is::<gpui_component::input::Copy>());
+        assert!(*os_action == gpui::OsAction::Copy);
+
+        let gpui::MenuItem::Action {
+            name,
+            action,
+            os_action: Some(os_action),
+        } = paste
+        else {
+            panic!("expected Paste to be a native menu action");
+        };
+        assert_eq!(name.as_ref(), "Paste");
+        assert!(action.as_any().is::<gpui_component::input::Paste>());
+        assert!(*os_action == gpui::OsAction::Paste);
     }
 }
 
@@ -3888,13 +3929,14 @@ impl AlulaApp {
                         .child(
                             Checkbox::new("environment-variable-secret")
                                 .small()
-                                .checked(existing_secret)
+                                .checked(toggle_secret.get())
                                 .label("Store securely as secret")
                                 .on_click(move |checked, window, cx| {
                                     toggle_secret.set(*checked);
                                     toggle_value.update(cx, |input, cx| {
                                         input.set_masked(*checked, window, cx)
                                     });
+                                    window.refresh();
                                 }),
                         )
                         .child(
@@ -8966,14 +9008,24 @@ fn quit_application(_: &QuitApplication, cx: &mut App) {
 
 #[cfg(target_os = "macos")]
 fn macos_app_menu() -> Vec<Menu> {
-    vec![Menu {
-        name: "Alula".into(),
-        items: vec![
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
-            MenuItem::separator(),
-            MenuItem::action("Quit Alula", QuitApplication),
-        ],
-    }]
+    vec![
+        Menu {
+            name: "Alula".into(),
+            items: vec![
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Quit Alula", QuitApplication),
+            ],
+        },
+        Menu {
+            name: "Edit".into(),
+            items: vec![
+                MenuItem::os_action("Cut", gpui_component::input::Cut, gpui::OsAction::Cut),
+                MenuItem::os_action("Copy", gpui_component::input::Copy, gpui::OsAction::Copy),
+                MenuItem::os_action("Paste", gpui_component::input::Paste, gpui::OsAction::Paste),
+            ],
+        },
+    ]
 }
 
 #[cfg(target_os = "macos")]
