@@ -6,22 +6,22 @@ use alula::{
     EnvironmentAgentCommand, EnvironmentFolder, EnvironmentStore, EnvironmentVariable, FocusUrl,
     HistoryAgentCommand, HistoryEntry, HistoryStore, HttpMethod, HttpSession, HttpStreamEvent,
     KeyValueField, McpHttpServer, McpToolHandler, NextTab, OpenCommandPalette, OpenSettings,
-    PersistedState, PreviousTab, RequestDraft, ResponseBodyCache, ResponseSnapshot, SendRequest,
-    SettingsView, ShowBody, ShowEnvironments, ShowFormattedResponse, ShowHeaders, ShowHistory,
-    ShowParameters, ShowRawResponse, ShowRequests, StatePaths, ThemeAgentCommand,
-    WebSocketDirection, WebSocketExecutor, WebSocketMessageSnapshot, WebSocketStreamEvent,
-    Workspace, apply_environment_agent_command, apply_history_agent_command, apply_theme,
-    apply_theme_agent_command, chunked_fenced_code_blocks, config_path, configured_key_bindings,
-    delete_secret, inspect_template, install_tls_crypto_provider, is_websocket_request,
-    load_secret, reply_to_tool, resolve_request, store_secret, syntax_language,
-    trim_response_formatting_start, valid_variable_name,
+    PersistedState, PreviousTab, QuitApplication, RequestDraft, ResponseBodyCache,
+    ResponseSnapshot, SendRequest, SettingsView, ShowBody, ShowEnvironments, ShowFormattedResponse,
+    ShowHeaders, ShowHistory, ShowParameters, ShowRawResponse, ShowRequests, StatePaths,
+    ThemeAgentCommand, WebSocketDirection, WebSocketExecutor, WebSocketMessageSnapshot,
+    WebSocketStreamEvent, Workspace, application_key_bindings, apply_environment_agent_command,
+    apply_history_agent_command, apply_theme, apply_theme_agent_command,
+    chunked_fenced_code_blocks, config_path, delete_secret, inspect_template,
+    install_tls_crypto_provider, is_websocket_request, load_secret, reply_to_tool, resolve_request,
+    store_secret, syntax_language, trim_response_formatting_start, valid_variable_name,
 };
 use anyhow::Result;
 use gpui::{prelude::*, *};
 use gpui_component::{
     ActiveTheme as _, Colorize as _, Icon, IconName, IndexPath, Root, Selectable as _,
     Sizable as _, WindowExt as _,
-    animation::cubic_bezier,
+    animation::{StableAnimationExt as _, cubic_bezier},
     button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _},
     checkbox::Checkbox,
     dialog::DialogButtonProps,
@@ -50,7 +50,7 @@ use std::{
     path::PathBuf,
     rc::Rc,
     sync::{
-        Arc,
+        Arc, Once,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -356,6 +356,9 @@ mod command_palette_tests {
         variable_completion_insert_text,
     };
 
+    #[cfg(target_os = "macos")]
+    use super::{QuitApplication, macos_app_menu};
+
     #[test]
     fn semantic_notification_icons_are_bundled() {
         for path in [
@@ -536,6 +539,20 @@ mod command_palette_tests {
             ("connection refused".into(), None),
         );
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_application_menu_exposes_the_quit_action() {
+        let menus = macos_app_menu();
+        assert_eq!(menus.len(), 1);
+        assert_eq!(menus[0].name.as_ref(), "Alula");
+
+        let gpui::MenuItem::Action { name, action, .. } = menus[0].items.last().unwrap() else {
+            panic!("expected Quit Alula to be the final application menu item");
+        };
+        assert_eq!(name.as_ref(), "Quit Alula");
+        assert!(action.as_any().is::<QuitApplication>());
+    }
 }
 
 fn creation_destination(section: WorkspaceSection) -> CreationDestination {
@@ -554,7 +571,7 @@ fn install_key_bindings(config: &AppConfig, cx: &mut App) {
     let component_bindings = cx.global::<ComponentKeyBindings>().0.clone();
     cx.clear_key_bindings();
     cx.bind_keys(component_bindings);
-    cx.bind_keys(configured_key_bindings(config));
+    cx.bind_keys(application_key_bindings(config));
 }
 
 #[derive(Clone)]
@@ -1005,6 +1022,7 @@ struct ResponseEditors {
 
 impl ResponseEditors {
     fn new(cache: ResponseBodyCache, window: &mut Window, cx: &mut Context<AlulaApp>) -> Self {
+        register_response_languages();
         let formatted = cache.formatted.display;
         let formatted_markdown = SharedString::from(cache.formatted.markdown);
         let raw = cache.raw;
@@ -1034,6 +1052,7 @@ impl ResponseEditors {
         window: &mut Window,
         cx: &mut Context<AlulaApp>,
     ) -> Self {
+        register_response_languages();
         Self {
             formatted_text: SharedString::default(),
             formatted_markdown: SharedString::default(),
@@ -1352,8 +1371,10 @@ struct AlulaApp {
     workspace_section: WorkspaceSection,
     environments: EnvironmentStore,
     history: HistoryStore,
+    history_loaded: bool,
     state_paths: StatePaths,
     persistence_dirty: Arc<AtomicBool>,
+    persistence_pending_while_history_loads: bool,
     environment_name: Entity<InputState>,
     environment_folder_name: Entity<InputState>,
     environment_search: Entity<InputState>,
@@ -2034,7 +2055,9 @@ impl AlulaApp {
             workspace_section: WorkspaceSection::Requests,
             environments,
             history,
+            history_loaded: false,
             persistence_dirty: Arc::new(AtomicBool::new(false)),
+            persistence_pending_while_history_loads: false,
             environment_name: cx
                 .new(|cx| InputState::new(window, cx).placeholder("Production, Staging, Local…")),
             environment_folder_name: cx
@@ -2060,7 +2083,46 @@ impl AlulaApp {
         Self::watch_persistence(app.persistence_dirty.clone(), cx);
         Self::watch_mcp_calls(mcp_ui_rx, window, cx);
         app.hydrate_secrets_in_background(cx);
+        Self::finish_startup_after_first_frame(window, cx);
         app
+    }
+
+    fn finish_startup_after_first_frame(window: &mut Window, cx: &mut Context<Self>) {
+        // History and tree-sitter's global language registry are not needed to
+        // paint the request editor. Start both only after the first frame has
+        // reached the screen, keeping cold files and language setup off the
+        // startup-critical path.
+        cx.on_next_frame(window, |this, _, cx| {
+            this.load_history_in_background(cx);
+            cx.background_executor()
+                .spawn(async { register_response_languages() })
+                .detach();
+        });
+    }
+
+    fn load_history_in_background(&self, cx: &mut Context<Self>) {
+        let paths = self.state_paths.clone();
+        let load = cx
+            .background_executor()
+            .spawn(async move { PersistedState::load_history(&paths) });
+        cx.spawn(async move |this, cx| {
+            let history = load.await;
+            let _ = this.update(cx, |this, cx| {
+                match history {
+                    Ok(history) => this.history.merge_older(history),
+                    Err(error) => eprintln!("could not load request history: {error:#}"),
+                }
+                this.history_loaded = true;
+                if this.persistence_pending_while_history_loads {
+                    this.persistence_pending_while_history_loads = false;
+                    this.persistence_dirty.store(true, Ordering::Release);
+                }
+                if this.workspace_section == WorkspaceSection::History {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn hydrate_secrets_in_background(&self, cx: &mut Context<Self>) {
@@ -2692,6 +2754,10 @@ impl AlulaApp {
                 Timer::after(PERSISTENCE_QUIET_PERIOD).await;
                 let state = match this.update(cx, |this, cx| {
                     if persistence_dirty.load(Ordering::Acquire) {
+                        return None;
+                    }
+                    if !this.history_loaded {
+                        this.persistence_pending_while_history_loads = true;
                         return None;
                     }
                     let workspace = this.workspace_snapshot(cx);
@@ -4702,8 +4768,9 @@ impl AlulaApp {
                             .child(env!("CARGO_PKG_VERSION")),
                     ),
             )
-            .with_animation(
-                SharedString::from(format!("brand-collapse-{collapsed}")),
+            .with_stable_animation(
+                "brand-collapse",
+                collapsed as usize,
                 Animation::new(Duration::from_secs_f64(0.18))
                     .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                 move |this, delta| {
@@ -4859,8 +4926,9 @@ impl AlulaApp {
                                     }
                                 });
                             })
-                            .with_animation(
-                                SharedString::from(format!("command-hover-{command_hovered}")),
+                            .with_stable_animation(
+                                "command-hover",
+                                command_hovered as usize,
                                 Animation::new(Duration::from_secs_f64(0.12))
                                     .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                                 move |this, delta| {
@@ -5054,8 +5122,9 @@ impl AlulaApp {
                         }
                     });
                 })
-                .with_animation(
-                    SharedString::from(format!("sidebar-hover-{label}-{hovered}")),
+                .with_stable_animation(
+                    SharedString::from(format!("sidebar-hover-{label}")),
+                    hovered as usize,
                     Animation::new(Duration::from_secs_f64(0.12))
                         .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                     move |this, delta| {
@@ -5197,10 +5266,9 @@ impl AlulaApp {
                                     }
                                 });
                             })
-                            .with_animation(
-                                SharedString::from(format!(
-                                    "new-request-hover-{new_request_hovered}"
-                                )),
+                            .with_stable_animation(
+                                "new-request-hover",
+                                new_request_hovered as usize,
                                 Animation::new(Duration::from_secs_f64(0.12))
                                     .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                                 move |this, delta| {
@@ -5329,8 +5397,9 @@ impl AlulaApp {
                     ),
             );
 
-        sidebar.with_animation(
-            SharedString::from(format!("sidebar-collapse-{collapsed}")),
+        sidebar.with_stable_animation(
+            "sidebar-collapse",
+            collapsed as usize,
             Animation::new(Duration::from_secs_f64(0.18))
                 .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
             move |this, delta| {
@@ -5344,6 +5413,10 @@ impl AlulaApp {
     fn render_request_tabs(&self, cx: &mut Context<Self>) -> Div {
         let app = cx.entity();
         let has_environments = !self.environments.environments.is_empty();
+        let assigned_request_ids = (self.tabs.len() > 4).then(|| {
+            self.environments
+                .assigned_request_ids(self.tabs.iter().map(|tab| tab.draft.id.as_str()))
+        });
         let mut bar = div()
             .id("request-tabs")
             .h_full()
@@ -5359,10 +5432,14 @@ impl AlulaApp {
             let label = tab.title.clone();
             let selected = index == self.active_tab;
             let request_id = tab.draft.id.clone();
-            let assigned_environment = self
-                .environments
-                .environment_for_request(&request_id)
-                .is_some();
+            let assigned_environment = assigned_request_ids.as_ref().map_or_else(
+                || {
+                    self.environments
+                        .environment_for_request(&request_id)
+                        .is_some()
+                },
+                |assigned_request_ids| assigned_request_ids.contains(request_id.as_str()),
+            );
             let menu_app = app.clone();
             let close_app = app.clone();
             let select_app = app.clone();
@@ -5731,11 +5808,9 @@ impl AlulaApp {
                             }
                         });
                     })
-                    .with_animation(
-                        SharedString::from(format!(
-                            "environment-variable-hover-{}-{hovered}",
-                            variable.id
-                        )),
+                    .with_stable_animation(
+                        SharedString::from(format!("environment-variable-hover-{}", variable.id)),
+                        hovered as usize,
                         Animation::new(Duration::from_secs_f64(0.12))
                             .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                         move |this, delta| {
@@ -5906,11 +5981,9 @@ impl AlulaApp {
                         }
                     });
                 })
-                .with_animation(
-                    SharedString::from(format!(
-                        "environment-request-hover-{}-{hovered}",
-                        request.id
-                    )),
+                .with_stable_animation(
+                    SharedString::from(format!("environment-request-hover-{}", request.id)),
+                    hovered as usize,
                     Animation::new(Duration::from_secs_f64(0.12))
                         .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                     move |this, delta| {
@@ -5929,18 +6002,23 @@ impl AlulaApp {
         app: Entity<Self>,
         cx: &mut App,
     ) -> Option<Div> {
-        let matching_count = folder_matching_request_count(folder, query);
+        let matching_count = if query.is_empty() {
+            folder.request_count()
+        } else {
+            folder_matching_request_count(folder, query)
+        };
         if !query.is_empty() && matching_count == 0 {
             return None;
         }
-        let folder_requests = folder
-            .requests
-            .iter()
-            .filter(|request| request_matches_query(request, query))
-            .cloned()
-            .collect::<Vec<_>>();
         let expanded =
             !query.is_empty() || self.expanded_environment_folder_ids.contains(&folder.id);
+        let folder_requests = expanded.then(|| {
+            folder
+                .requests
+                .iter()
+                .filter(|request| request_matches_query(request, query))
+                .collect::<Vec<_>>()
+        });
         let add_request_app = app.clone();
         let add_request_environment_id = environment_id.to_owned();
         let add_request_folder_id = folder.id.clone();
@@ -6114,7 +6192,7 @@ impl AlulaApp {
                     section = section.child(child_section);
                 }
             }
-            for request in &folder_requests {
+            for request in folder_requests.into_iter().flatten() {
                 section = section.child(self.environment_request_row(
                     environment_id,
                     request,
@@ -6137,6 +6215,65 @@ impl AlulaApp {
             .value()
             .trim()
             .to_ascii_lowercase();
+        if environment.folders.is_empty() {
+            let filtered_indices = environment
+                .requests
+                .iter()
+                .enumerate()
+                .filter_map(|(index, request)| {
+                    request_matches_query(request, &query).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            if filtered_indices.is_empty() {
+                return empty_state(
+                    if query.is_empty() {
+                        "No requests yet"
+                    } else {
+                        "No matching requests"
+                    },
+                    if query.is_empty() {
+                        "Right-click a request tab to add it here"
+                    } else {
+                        "Try a different search"
+                    },
+                    cx,
+                );
+            }
+
+            let app = cx.entity();
+            let environment_id = environment.id.clone();
+            let list_id = SharedString::from(format!("environment-requests-{environment_id}"));
+            return div().size_full().min_h_0().child(
+                uniform_list(
+                    list_id,
+                    filtered_indices.len(),
+                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        let Some(environment) = this
+                            .environments
+                            .environments
+                            .iter()
+                            .find(|environment| environment.id == environment_id)
+                        else {
+                            return Vec::new();
+                        };
+                        range
+                            .filter_map(|position| {
+                                let request =
+                                    environment.requests.get(filtered_indices[position])?;
+                                Some(this.environment_request_row(
+                                    &environment_id,
+                                    request,
+                                    app.clone(),
+                                    cx,
+                                ))
+                            })
+                            .collect::<Vec<_>>()
+                    }),
+                )
+                .size_full(),
+            );
+        }
+
         let matching_count = environment
             .requests
             .iter()
@@ -6169,7 +6306,6 @@ impl AlulaApp {
             .requests
             .iter()
             .filter(|request| request_matches_query(request, &query))
-            .cloned()
             .collect::<Vec<_>>();
         let mut list = div()
             .size_full()
@@ -6207,7 +6343,7 @@ impl AlulaApp {
                     .child("Requests")
                     .child(quiet_badge(root_requests.len().to_string(), cx)),
             );
-            for request in &root_requests {
+            for request in root_requests {
                 root_section = root_section.child(self.environment_request_row(
                     &environment_id,
                     request,
@@ -6716,11 +6852,12 @@ impl AlulaApp {
                                 }
                             });
                         })
-                        .with_animation(
+                        .with_stable_animation(
                             SharedString::from(format!(
-                                "environment-card-hover-{}-{hovered}",
+                                "environment-card-hover-{}",
                                 environment.id
                             )),
+                            hovered as usize,
                             Animation::new(Duration::from_secs_f64(0.12))
                                 .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                             move |this, delta| {
@@ -7075,8 +7212,9 @@ impl AlulaApp {
                             }
                         });
                     })
-                    .with_animation(
-                        SharedString::from(format!("history-hover-{}-{hovered}", entry.id)),
+                    .with_stable_animation(
+                        SharedString::from(format!("history-hover-{}", entry.id)),
+                        hovered as usize,
                         Animation::new(Duration::from_secs_f64(0.12))
                             .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                         move |this, delta| {
@@ -7094,27 +7232,18 @@ impl AlulaApp {
             .value()
             .trim()
             .to_ascii_lowercase();
-        let filtered_indices = self
-            .history
-            .entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| {
-                let searchable = format!(
-                    "{} {} {} {} {}",
-                    entry.request.method.as_str(),
-                    entry.request.display_name(),
-                    entry.request.url,
-                    entry
-                        .status
-                        .map(|status| status.to_string())
-                        .unwrap_or_default(),
-                    entry.error.as_deref().unwrap_or_default(),
-                )
-                .to_ascii_lowercase();
-                (query.is_empty() || searchable.contains(&query)).then_some(index)
-            })
-            .collect::<Vec<_>>();
+        let filtered_indices = if query.is_empty() {
+            (0..self.history.entries.len()).collect::<Vec<_>>()
+        } else {
+            self.history
+                .entries
+                .iter()
+                .enumerate()
+                .filter_map(|(index, entry)| {
+                    history_entry_matches_query(entry, &query).then_some(index)
+                })
+                .collect::<Vec<_>>()
+        };
         let visible_count = filtered_indices.len();
         let count_label = if query.is_empty() {
             format!("{} entries", self.history.entries.len())
@@ -7297,10 +7426,9 @@ impl AlulaApp {
                 .flex()
                 .items_center()
                 .child(Icon::new(IconName::ArrowRight).size_3p5())
-                .with_animation(
-                    SharedString::from(format!(
-                        "send-hover-arrow-{send_animation_id}-{send_hovered}"
-                    )),
+                .with_stable_animation(
+                    SharedString::from(format!("send-hover-arrow-{send_animation_id}")),
+                    send_hovered as usize,
                     Animation::new(Duration::from_secs_f64(0.12))
                         .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                     move |this, delta| {
@@ -7425,10 +7553,9 @@ impl AlulaApp {
                                         }
                                     });
                                 })
-                                .with_animation(
-                                    SharedString::from(format!(
-                                        "send-hover-{send_animation_id}-{send_hovered}"
-                                    )),
+                                .with_stable_animation(
+                                    SharedString::from(format!("send-hover-{send_animation_id}")),
+                                    send_hovered as usize,
                                     Animation::new(Duration::from_secs_f64(0.12))
                                         .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                                     move |this, delta| {
@@ -8657,6 +8784,22 @@ fn request_matches_query(request: &RequestDraft, query: &str) -> bool {
         || ascii_contains_ignore_case(request.method.as_str(), query)
 }
 
+fn history_entry_matches_query(entry: &HistoryEntry, query: &str) -> bool {
+    format!(
+        "{} {} {} {} {}",
+        entry.request.method.as_str(),
+        entry.request.display_name(),
+        entry.request.url,
+        entry
+            .status
+            .map(|status| status.to_string())
+            .unwrap_or_default(),
+        entry.error.as_deref().unwrap_or_default(),
+    )
+    .to_ascii_lowercase()
+    .contains(query)
+}
+
 fn folder_matching_request_count(folder: &EnvironmentFolder, query: &str) -> usize {
     folder
         .requests
@@ -8682,51 +8825,54 @@ fn split_history_error(error: &str) -> (String, Option<String>) {
 }
 
 fn register_response_languages() {
-    let registry = LanguageRegistry::singleton();
-    registry.register(
-        "css",
-        &LanguageConfig::new(
+    static RESPONSE_LANGUAGES: Once = Once::new();
+    RESPONSE_LANGUAGES.call_once(|| {
+        let registry = LanguageRegistry::singleton();
+        registry.register(
             "css",
-            tree_sitter_css::LANGUAGE.into(),
-            vec![],
-            tree_sitter_css::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
-    registry.register(
-        "javascript",
-        &LanguageConfig::new(
+            &LanguageConfig::new(
+                "css",
+                tree_sitter_css::LANGUAGE.into(),
+                vec![],
+                tree_sitter_css::HIGHLIGHTS_QUERY,
+                "",
+                "",
+            ),
+        );
+        registry.register(
             "javascript",
-            tree_sitter_javascript::LANGUAGE.into(),
-            vec!["json".into(), "css".into(), "html".into()],
-            tree_sitter_javascript::HIGHLIGHT_QUERY,
-            tree_sitter_javascript::INJECTIONS_QUERY,
-            tree_sitter_javascript::LOCALS_QUERY,
-        ),
-    );
-    registry.register(
-        "html",
-        &LanguageConfig::new(
+            &LanguageConfig::new(
+                "javascript",
+                tree_sitter_javascript::LANGUAGE.into(),
+                vec!["json".into(), "css".into(), "html".into()],
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::INJECTIONS_QUERY,
+                tree_sitter_javascript::LOCALS_QUERY,
+            ),
+        );
+        registry.register(
             "html",
-            tree_sitter_html::LANGUAGE.into(),
-            vec!["javascript".into(), "css".into()],
-            tree_sitter_html::HIGHLIGHTS_QUERY,
-            tree_sitter_html::INJECTIONS_QUERY,
-            "",
-        ),
-    );
-    registry.register(
-        "xml",
-        &LanguageConfig::new(
+            &LanguageConfig::new(
+                "html",
+                tree_sitter_html::LANGUAGE.into(),
+                vec!["javascript".into(), "css".into()],
+                tree_sitter_html::HIGHLIGHTS_QUERY,
+                tree_sitter_html::INJECTIONS_QUERY,
+                "",
+            ),
+        );
+        registry.register(
             "xml",
-            tree_sitter_html::LANGUAGE.into(),
-            vec![],
-            tree_sitter_html::HIGHLIGHTS_QUERY,
-            "",
-            "",
-        ),
-    );
+            &LanguageConfig::new(
+                "xml",
+                tree_sitter_html::LANGUAGE.into(),
+                vec![],
+                tree_sitter_html::HIGHLIGHTS_QUERY,
+                "",
+                "",
+            ),
+        );
+    });
 }
 
 fn parse_http_method(value: &str) -> Option<HttpMethod> {
@@ -8814,6 +8960,30 @@ fn relative_history_time(sent_at_unix_ms: u64) -> String {
     }
 }
 
+fn quit_application(_: &QuitApplication, cx: &mut App) {
+    cx.quit();
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_menu() -> Vec<Menu> {
+    vec![Menu {
+        name: "Alula".into(),
+        items: vec![
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Quit Alula", QuitApplication),
+        ],
+    }]
+}
+
+#[cfg(target_os = "macos")]
+fn install_app_menu(cx: &mut App) {
+    cx.set_menus(macos_app_menu());
+}
+
+#[cfg(not(target_os = "macos"))]
+fn install_app_menu(_: &mut App) {}
+
 #[cfg(target_os = "macos")]
 fn install_app_icon() {
     use objc2::{AnyThread, MainThreadMarker, rc::Retained};
@@ -8845,6 +9015,7 @@ fn main() -> Result<()> {
     let app = Application::new().with_assets(Assets);
     app.run(|cx| {
         gpui_component::init(cx);
+        cx.on_action(quit_application);
         install_app_icon();
         // GPUI 0.2 matches font weights between registered faces but does not
         // set a variable font's `wght` axis. Register concrete instances so
@@ -8859,7 +9030,6 @@ fn main() -> Result<()> {
         }
         let component_bindings = cx.key_bindings().borrow().bindings().cloned().collect();
         cx.set_global(ComponentKeyBindings(component_bindings));
-        register_response_languages();
         let theme_path = config_path();
         let theme_config = AppConfig::load_or_create(&theme_path).unwrap_or_else(|error| {
             eprintln!("could not load theme configuration: {error:#}");
@@ -8869,8 +9039,9 @@ fn main() -> Result<()> {
             eprintln!("could not apply theme configuration: {error:#}");
         }
         install_key_bindings(&theme_config, cx);
+        install_app_menu(cx);
         let state_paths = StatePaths::beside(&theme_path);
-        let persisted = PersistedState::load(&state_paths).unwrap_or_else(|error| {
+        let persisted = PersistedState::load_startup(&state_paths).unwrap_or_else(|error| {
             eprintln!("could not load persistent workspace state: {error:#}");
             PersistedState {
                 workspace: Workspace::default(),

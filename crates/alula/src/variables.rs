@@ -56,13 +56,12 @@ impl TemplateInspection {
 }
 
 pub fn valid_variable_name(name: &str) -> bool {
-    let mut characters = name.chars();
-    matches!(characters.next(), Some(first) if first == '_' || first.is_ascii_alphabetic())
-        && characters.all(|character| {
-            character == '_'
-                || character == '-'
-                || character == '.'
-                || character.is_ascii_alphanumeric()
+    let Some((&first, remaining)) = name.as_bytes().split_first() else {
+        return false;
+    };
+    (first == b'_' || first.is_ascii_alphabetic())
+        && remaining.iter().all(|byte| {
+            *byte == b'_' || *byte == b'-' || *byte == b'.' || byte.is_ascii_alphanumeric()
         })
 }
 
@@ -127,14 +126,13 @@ fn visit_template<'a>(
             break;
         };
         let content_start = open + VARIABLE_OPEN.len();
-        let Some(relative_close) = source[content_start..].find(VARIABLE_CLOSE) else {
+        let Some(close) = next_close else {
             errors.push(VariableError {
                 range: open..source.len(),
                 kind: VariableErrorKind::InvalidSyntax,
             });
             break;
         };
-        let close = content_start + relative_close;
         let end = close + VARIABLE_CLOSE.len();
         let name = &source[content_start..close];
         if !valid_variable_name(name) {
@@ -142,17 +140,15 @@ fn visit_template<'a>(
                 range: open..end,
                 kind: VariableErrorKind::InvalidSyntax,
             });
-        } else if let Some(variable) = variable_index
-            .and_then(|index| index.get(name).copied())
-            .or_else(|| {
-                environment.and_then(|environment| {
-                    environment
-                        .variables
-                        .iter()
-                        .find(|variable| variable.name == name)
-                })
-            })
-        {
+        } else if let Some(variable) = match variable_index {
+            Some(index) => index.get(name).copied(),
+            None => environment.and_then(|environment| {
+                environment
+                    .variables
+                    .iter()
+                    .find(|variable| variable.name == name)
+            }),
+        } {
             if variable.secret && variable.value.is_none() {
                 errors.push(VariableError {
                     range: open..end,

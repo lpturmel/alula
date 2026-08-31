@@ -28,9 +28,11 @@ pub struct HttpSession {
 
 // Keep the first paint cheap enough to syntax-highlight synchronously. Later
 // reads are still coalesced before they reach the UI.
-const READ_BUFFER_BYTES: usize = 2 * 1024;
+const FIRST_READ_BUFFER_BYTES: usize = 2 * 1024;
+const READ_BUFFER_BYTES: usize = 64 * 1024;
 const STREAM_UPDATE_BYTES: usize = 64 * 1024;
 const STREAM_UPDATE_INTERVAL: Duration = Duration::from_millis(33);
+const MAX_PREALLOCATED_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HttpStreamEvent {
@@ -53,7 +55,7 @@ struct Utf8LossyDecoder {
 impl Utf8LossyDecoder {
     fn push(&mut self, bytes: &[u8]) -> String {
         self.pending.extend_from_slice(bytes);
-        let mut output = String::new();
+        let mut output = String::with_capacity(self.pending.len());
         let mut consumed = 0;
 
         while consumed < self.pending.len() {
@@ -79,7 +81,9 @@ impl Utf8LossyDecoder {
             }
         }
 
-        if consumed > 0 {
+        if consumed == self.pending.len() {
+            self.pending.clear();
+        } else if consumed > 0 {
             self.pending.drain(..consumed);
         }
         output
@@ -211,15 +215,26 @@ impl HttpSession {
 
         let mut decoder = Utf8LossyDecoder::default();
         let mut read_buffer = [0_u8; READ_BUFFER_BYTES];
-        let mut body = String::new();
-        let mut pending_update = String::new();
+        let expected_body_bytes = response
+            .content_length()
+            .and_then(|length| usize::try_from(length).ok())
+            .unwrap_or_default()
+            .min(MAX_PREALLOCATED_RESPONSE_BYTES);
+        let mut body = String::with_capacity(expected_body_bytes);
+        let mut pending_update =
+            String::with_capacity(expected_body_bytes.min(STREAM_UPDATE_BYTES));
         let mut size_bytes = 0;
         let mut published_first_chunk = false;
         let mut last_update = Instant::now();
 
         loop {
+            let read_capacity = if published_first_chunk {
+                READ_BUFFER_BYTES
+            } else {
+                FIRST_READ_BUFFER_BYTES
+            };
             let read = response
-                .read(&mut read_buffer)
+                .read(&mut read_buffer[..read_capacity])
                 .context("failed to read response body")?;
             if read == 0 {
                 break;

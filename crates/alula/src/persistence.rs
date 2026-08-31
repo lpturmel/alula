@@ -1,23 +1,52 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet, VecDeque},
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context as _, Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use bincode::Options as _;
 use serde::{Deserialize, Serialize, Serializer, de::DeserializeOwned, ser::SerializeStruct};
 
 use crate::model::{RequestDraft, ResponseSnapshot, Workspace, next_id};
 
 pub const STATE_VERSION: u32 = 1;
 pub const MAX_HISTORY_ENTRIES: usize = 500;
+const STATE_CACHE_MAGIC: &[u8; 8] = b"ALULAC01";
+const STATE_CACHE_HEADER_BYTES: usize = 28;
+const MAX_STATE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const ENVIRONMENT_SHARE_PREFIX: &str = "alula-env-v1:";
 const ENVIRONMENT_SHARE_VERSION: u32 = 1;
 const MAX_ENVIRONMENT_SHARE_BYTES: usize = 16 * 1024 * 1024;
+static NEXT_TEMPORARY_FILE: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+struct SourceStamp {
+    len: u64,
+    modified_secs: u64,
+    modified_nanos: u32,
+}
+
+impl SourceStamp {
+    fn read(path: &Path) -> Option<Self> {
+        let metadata = fs::metadata(path).ok()?;
+        let modified = metadata.modified().ok()?;
+        let duration = modified.duration_since(UNIX_EPOCH).ok()?;
+        Some(Self {
+            len: metadata.len(),
+            modified_secs: duration.as_secs(),
+            modified_nanos: duration.subsec_nanos(),
+        })
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 struct EnvironmentSharePayload {
@@ -330,14 +359,32 @@ impl EnvironmentFolder {
         removed
     }
 
-    pub fn sync_open_requests(&mut self, requests: &[RequestDraft]) {
+    fn sync_open_requests(&mut self, requests: &HashMap<&str, &RequestDraft>) {
         for saved in &mut self.requests {
-            if let Some(open) = requests.iter().find(|request| request.id == saved.id) {
-                *saved = open.clone();
+            if let Some(open) = requests.get(saved.id.as_str())
+                && saved != *open
+            {
+                saved.clone_from(open);
             }
         }
         for folder in &mut self.folders {
             folder.sync_open_requests(requests);
+        }
+    }
+
+    fn collect_matching_request_ids<'a>(
+        &'a self,
+        requested: &HashSet<&str>,
+        assigned: &mut HashSet<&'a str>,
+    ) {
+        assigned.extend(
+            self.requests
+                .iter()
+                .map(|request| request.id.as_str())
+                .filter(|request_id| requested.contains(request_id)),
+        );
+        for folder in &self.folders {
+            folder.collect_matching_request_ids(requested, assigned);
         }
     }
 
@@ -525,26 +572,22 @@ impl EnvironmentStore {
         folder_id: Option<&str>,
         request: RequestDraft,
     ) -> Result<()> {
-        if !self
+        let Some(environment_index) = self
             .environments
             .iter()
-            .any(|environment| environment.id == environment_id)
-        {
+            .position(|environment| environment.id == environment_id)
+        else {
             anyhow::bail!("environment not found");
-        }
+        };
         if let Some(folder_id) = folder_id
-            && !self.environments.iter().any(|environment| {
-                environment.id == environment_id && environment.find_folder(folder_id).is_some()
-            })
+            && self.environments[environment_index]
+                .find_folder(folder_id)
+                .is_none()
         {
             anyhow::bail!("folder not found");
         }
         self.remove_request(&request.id);
-        let environment = self
-            .environments
-            .iter_mut()
-            .find(|environment| environment.id == environment_id)
-            .expect("environment existence checked");
+        let environment = &mut self.environments[environment_index];
         if let Some(folder_id) = folder_id {
             let folder = environment
                 .find_folder_mut(folder_id)
@@ -633,16 +676,52 @@ impl EnvironmentStore {
     }
 
     pub fn sync_open_requests(&mut self, requests: &[RequestDraft]) {
+        if requests.is_empty() {
+            return;
+        }
+        let requests = requests
+            .iter()
+            .map(|request| (request.id.as_str(), request))
+            .collect::<HashMap<_, _>>();
         for environment in &mut self.environments {
             for saved in &mut environment.requests {
-                if let Some(open) = requests.iter().find(|request| request.id == saved.id) {
-                    *saved = open.clone();
+                if let Some(open) = requests.get(saved.id.as_str())
+                    && saved != *open
+                {
+                    saved.clone_from(open);
                 }
             }
             for folder in &mut environment.folders {
-                folder.sync_open_requests(requests);
+                folder.sync_open_requests(&requests);
             }
         }
+    }
+
+    /// Returns the request IDs assigned anywhere in the environment tree.
+    /// This is intended for batch membership checks during a render; building
+    /// one set avoids repeatedly walking every saved request for each open tab.
+    pub fn assigned_request_ids<'a, 'b>(
+        &'a self,
+        request_ids: impl IntoIterator<Item = &'b str>,
+    ) -> HashSet<&'a str> {
+        let requested = request_ids.into_iter().collect::<HashSet<_>>();
+        let mut assigned = HashSet::with_capacity(requested.len());
+        for environment in &self.environments {
+            assigned.extend(
+                environment
+                    .requests
+                    .iter()
+                    .map(|request| request.id.as_str())
+                    .filter(|request_id| requested.contains(request_id)),
+            );
+            for folder in &environment.folders {
+                folder.collect_matching_request_ids(&requested, &mut assigned);
+            }
+            if assigned.len() == requested.len() {
+                break;
+            }
+        }
+        assigned
     }
 }
 
@@ -715,14 +794,14 @@ pub struct HistoryStore {
     #[serde(default = "state_version")]
     pub version: u32,
     #[serde(default)]
-    pub entries: Arc<Vec<HistoryEntry>>,
+    pub entries: Arc<VecDeque<HistoryEntry>>,
 }
 
 impl Default for HistoryStore {
     fn default() -> Self {
         Self {
             version: STATE_VERSION,
-            entries: Arc::new(Vec::new()),
+            entries: Arc::new(VecDeque::new()),
         }
     }
 }
@@ -730,7 +809,7 @@ impl Default for HistoryStore {
 impl HistoryStore {
     pub fn push(&mut self, entry: HistoryEntry) {
         let entries = Arc::make_mut(&mut self.entries);
-        entries.insert(0, entry);
+        entries.push_front(entry);
         entries.truncate(MAX_HISTORY_ENTRIES);
     }
 
@@ -739,6 +818,33 @@ impl HistoryStore {
         let previous_len = entries.len();
         entries.retain(|entry| entry.id != history_id);
         entries.len() != previous_len
+    }
+
+    /// Adds an older, persisted history behind entries recorded since its
+    /// asynchronous load started. IDs are de-duplicated so an MCP command and
+    /// the desktop app cannot make the same entry appear twice.
+    pub fn merge_older(&mut self, older: Self) {
+        self.version = self.version.max(older.version);
+        if self.entries.is_empty() {
+            self.entries = older.entries;
+            Arc::make_mut(&mut self.entries).truncate(MAX_HISTORY_ENTRIES);
+            return;
+        }
+
+        let entries = Arc::make_mut(&mut self.entries);
+        let remaining = MAX_HISTORY_ENTRIES.saturating_sub(entries.len());
+        let mut ids = entries
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect::<HashSet<_>>();
+        entries.extend(
+            older
+                .entries
+                .iter()
+                .filter(|entry| ids.insert(entry.id.clone()))
+                .take(remaining)
+                .cloned(),
+        );
     }
 }
 
@@ -768,6 +874,32 @@ pub struct PersistedState {
 }
 
 impl PersistedState {
+    /// Loads only state required to construct the first window. History is
+    /// deliberately left empty and can be loaded after the first frame with
+    /// [`Self::load_history`].
+    pub fn load_startup(paths: &StatePaths) -> Result<Self> {
+        thread::scope(|scope| {
+            let workspace = scope.spawn(|| load_or_default::<Workspace>(&paths.workspace));
+            let environments =
+                scope.spawn(|| load_or_default::<EnvironmentStore>(&paths.environments));
+            Ok(Self {
+                workspace: workspace
+                    .join()
+                    .map_err(|_| anyhow!("workspace loader panicked"))??
+                    .normalize(),
+                history: HistoryStore::default(),
+                environments: environments
+                    .join()
+                    .map_err(|_| anyhow!("environment loader panicked"))??
+                    .normalize(),
+            })
+        })
+    }
+
+    pub fn load_history(paths: &StatePaths) -> Result<HistoryStore> {
+        load_or_default(&paths.history)
+    }
+
     pub fn load(paths: &StatePaths) -> Result<Self> {
         thread::scope(|scope| {
             let workspace = scope.spawn(|| load_or_default::<Workspace>(&paths.workspace));
@@ -809,26 +941,124 @@ impl PersistedState {
     }
 }
 
-pub fn load_or_default<T: DeserializeOwned + Default>(path: &Path) -> Result<T> {
-    if !path.exists() {
+pub fn load_or_default<T: DeserializeOwned + Serialize + Default>(path: &Path) -> Result<T> {
+    let Some(source_stamp) = SourceStamp::read(path) else {
+        if path.exists() {
+            return Err(anyhow!("failed to read metadata for {}", path.display()));
+        }
         return Ok(T::default());
+    };
+    if let Some(value) = load_state_cache(path, source_stamp) {
+        return Ok(value);
     }
     let source =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
-    toml::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))
+    let value =
+        toml::from_str(&source).with_context(|| format!("failed to parse {}", path.display()))?;
+    // A cache is disposable acceleration data. Failure to create it must not
+    // turn a successfully parsed, user-editable TOML file into a load error.
+    let _ = save_state_cache(path, source_stamp, &value);
+    Ok(value)
 }
 
-pub fn save_toml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub fn save_toml<T: Serialize + Sync>(path: &Path, value: &T) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let source = toml::to_string_pretty(value).context("failed to serialize persisted state")?;
-    let temporary = path.with_extension("toml.tmp");
+    // TOML remains the editable source of truth, while a compact binary cache powers
+    // subsequent loads. Serialize both representations concurrently so the
+    // cache does not nearly double persistence latency for large histories.
+    let (source, cached_value) = thread::scope(|scope| {
+        let cached_value = scope.spawn(|| serialize_state_cache_value(value));
+        let source = toml::to_string_pretty(value);
+        let cached_value = cached_value.join().ok().and_then(Result::ok);
+        (source, cached_value)
+    });
+    let source = source.context("failed to serialize persisted state")?;
+    if fs::read(path).is_ok_and(|existing| existing.as_slice() == source.as_bytes()) {
+        if !cache_path(path).exists()
+            && let (Some(source_stamp), Some(cached_value)) =
+                (SourceStamp::read(path), cached_value)
+        {
+            let _ = save_serialized_state_cache(path, source_stamp, &cached_value);
+        }
+        return Ok(());
+    }
+    atomic_write(path, source.as_bytes())?;
+    if let (Some(source_stamp), Some(cached_value)) = (SourceStamp::read(path), cached_value) {
+        let _ = save_serialized_state_cache(path, source_stamp, &cached_value);
+    }
+    Ok(())
+}
+
+fn load_state_cache<T: DeserializeOwned>(path: &Path, source_stamp: SourceStamp) -> Option<T> {
+    let cache_path = cache_path(path);
+    if fs::metadata(&cache_path).ok()?.len() > MAX_STATE_CACHE_BYTES {
+        return None;
+    }
+    let source = fs::read(cache_path).ok()?;
+    if source.get(..STATE_CACHE_MAGIC.len())? != STATE_CACHE_MAGIC {
+        return None;
+    }
+    let cached_stamp = SourceStamp {
+        len: u64::from_le_bytes(source.get(8..16)?.try_into().ok()?),
+        modified_secs: u64::from_le_bytes(source.get(16..24)?.try_into().ok()?),
+        modified_nanos: u32::from_le_bytes(source.get(24..28)?.try_into().ok()?),
+    };
+    if cached_stamp != source_stamp {
+        return None;
+    }
+    deserialize_state_cache_value(source.get(STATE_CACHE_HEADER_BYTES..)?).ok()
+}
+
+fn save_state_cache<T: Serialize>(path: &Path, source_stamp: SourceStamp, value: &T) -> Result<()> {
+    let value =
+        serialize_state_cache_value(value).context("failed to serialize persisted-state cache")?;
+    save_serialized_state_cache(path, source_stamp, &value)
+}
+
+fn save_serialized_state_cache(path: &Path, source_stamp: SourceStamp, value: &[u8]) -> Result<()> {
+    let mut source = Vec::with_capacity(value.len().saturating_add(STATE_CACHE_HEADER_BYTES));
+    source.extend_from_slice(STATE_CACHE_MAGIC);
+    source.extend_from_slice(&source_stamp.len.to_le_bytes());
+    source.extend_from_slice(&source_stamp.modified_secs.to_le_bytes());
+    source.extend_from_slice(&source_stamp.modified_nanos.to_le_bytes());
+    source.extend_from_slice(value);
+    atomic_write(&cache_path(path), &source)
+}
+
+fn serialize_state_cache_value<T: Serialize>(value: &T) -> bincode::Result<Vec<u8>> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(MAX_STATE_CACHE_BYTES)
+        .serialize(value)
+}
+
+fn deserialize_state_cache_value<T: DeserializeOwned>(source: &[u8]) -> bincode::Result<T> {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_limit(MAX_STATE_CACHE_BYTES)
+        .deserialize(source)
+}
+
+fn cache_path(path: &Path) -> PathBuf {
+    let mut cache = OsString::from(path.as_os_str());
+    cache.push(".cache");
+    PathBuf::from(cache)
+}
+
+fn atomic_write(path: &Path, source: &[u8]) -> Result<()> {
+    let sequence = NEXT_TEMPORARY_FILE.fetch_add(1, Ordering::Relaxed);
+    let mut temporary = OsString::from(path.as_os_str());
+    temporary.push(format!(".tmp-{}-{sequence}", std::process::id()));
+    let temporary = PathBuf::from(temporary);
     fs::write(&temporary, source)
         .with_context(|| format!("failed to write {}", temporary.display()))?;
-    fs::rename(&temporary, path)
-        .with_context(|| format!("failed to replace {}", path.display()))?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error).with_context(|| format!("failed to replace {}", path.display()));
+    }
     Ok(())
 }
 
@@ -879,6 +1109,99 @@ mod tests {
         assert!(paths.history.exists());
         assert!(paths.environments.exists());
         let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn startup_load_defers_history_without_losing_newer_entries() {
+        let directory = std::env::temp_dir().join(format!(
+            "alula-startup-state-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        let paths = StatePaths::beside(&directory.join("config.toml"));
+        let mut state = PersistedState::load(&paths).unwrap();
+        let request = state.workspace.active().unwrap().clone();
+        state
+            .history
+            .push(HistoryEntry::failure(request.clone(), "persisted"));
+        state.save(&paths).unwrap();
+
+        let mut startup = PersistedState::load_startup(&paths).unwrap();
+        assert!(startup.history.entries.is_empty());
+        startup
+            .history
+            .push(HistoryEntry::failure(request, "newer"));
+        startup
+            .history
+            .merge_older(PersistedState::load_history(&paths).unwrap());
+
+        assert_eq!(startup.history.entries.len(), 2);
+        assert_eq!(startup.history.entries[0].error.as_deref(), Some("newer"));
+        assert_eq!(
+            startup.history.entries[1].error.as_deref(),
+            Some("persisted")
+        );
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn state_cache_accelerates_loads_but_never_overrides_edited_toml() {
+        let directory = std::env::temp_dir().join(format!(
+            "alula-cache-{}-{}",
+            std::process::id(),
+            now_unix_ms()
+        ));
+        let path = directory.join("workspace.toml");
+        let workspace = Workspace::default();
+        save_toml(&path, &workspace).unwrap();
+        assert!(cache_path(&path).exists());
+        assert_eq!(
+            load_or_default::<Workspace>(&path)
+                .unwrap()
+                .active_request_id,
+            workspace.active_request_id
+        );
+
+        let mut edited = workspace.clone();
+        let second = RequestDraft::default();
+        edited.active_request_id = second.id.clone();
+        edited.requests.push(second);
+        let mut source = toml::to_string_pretty(&edited).unwrap();
+        source.push_str("\n# edited outside Alula\n");
+        fs::write(&path, source).unwrap();
+
+        let loaded = load_or_default::<Workspace>(&path).unwrap();
+        assert_eq!(loaded.active_request_id, edited.active_request_id);
+        assert_eq!(loaded.requests.len(), 2);
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn large_environment_sync_updates_nested_requests_and_batch_ids() {
+        let mut environment = Environment::new("Performance");
+        let mut folder = EnvironmentFolder::new("Nested");
+        let saved = RequestDraft {
+            name: "Saved".into(),
+            ..RequestDraft::default()
+        };
+        let request_id = saved.id.clone();
+        folder.requests.push(saved);
+        environment.folders.push(folder);
+        let mut store = EnvironmentStore {
+            environments: vec![environment],
+            ..EnvironmentStore::default()
+        };
+        let mut open = store.environments[0].folders[0].requests[0].clone();
+        open.name = "Open".into();
+
+        store.sync_open_requests(&[open]);
+
+        assert_eq!(store.environments[0].folders[0].requests[0].name, "Open");
+        assert!(
+            store
+                .assigned_request_ids([request_id.as_str()])
+                .contains(request_id.as_str())
+        );
     }
 
     #[test]
@@ -1013,9 +1336,11 @@ variables = []
             Some("do-not-share".into()),
         ));
         let mut folder = EnvironmentFolder::new("Authentication");
-        let mut request = RequestDraft::default();
-        request.name = "Sign in".into();
-        request.url = "{{api_url}}/login".into();
+        let request = RequestDraft {
+            name: "Sign in".into(),
+            url: "{{api_url}}/login".into(),
+            ..RequestDraft::default()
+        };
         folder.requests.push(request);
         environment.folders.push(folder);
 

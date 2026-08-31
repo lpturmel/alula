@@ -289,8 +289,9 @@ fn looks_like_json(body: &str) -> bool {
 }
 
 fn looks_like_html(body: &str) -> bool {
-    let body = body.trim_start().to_ascii_lowercase();
-    body.starts_with("<!doctype html") || body.starts_with("<html")
+    let body = body.trim_start();
+    starts_with_ignore_ascii_case(body, "<!doctype html")
+        || starts_with_ignore_ascii_case(body, "<html")
 }
 
 fn format_markup(source: &str) -> String {
@@ -299,55 +300,69 @@ fn format_markup(source: &str) -> String {
         "source", "track", "wbr",
     ];
 
-    let mut lines = Vec::new();
+    let mut output = String::with_capacity(source.len().saturating_add(source.len() / 4));
     let mut indent = 0_usize;
     let mut rest = source.trim();
     while !rest.is_empty() {
         let Some(open) = rest.find('<') else {
-            push_line(&mut lines, indent, rest);
+            push_line(&mut output, indent, rest);
             break;
         };
-        push_line(&mut lines, indent, &rest[..open]);
+        push_line(&mut output, indent, &rest[..open]);
         rest = &rest[open..];
         let Some(close) = rest.find('>') else {
-            push_line(&mut lines, indent, rest);
+            push_line(&mut output, indent, rest);
             break;
         };
         let tag = &rest[..=close];
-        let normalized = tag
+        let tag_name = tag
             .trim_start_matches('<')
             .trim_start_matches('/')
             .trim_start_matches('!')
             .trim_start_matches('?')
             .split(|ch: char| ch.is_whitespace() || ch == '>' || ch == '/')
             .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
+            .unwrap_or_default();
         let is_closing = tag.starts_with("</");
         let is_special = tag.starts_with("<!") || tag.starts_with("<?");
         let is_void = tag.trim_end().ends_with("/>")
             || is_special
-            || VOID_TAGS.contains(&normalized.as_str());
+            || VOID_TAGS
+                .iter()
+                .any(|void_tag| tag_name.eq_ignore_ascii_case(void_tag));
         if is_closing {
             indent = indent.saturating_sub(1);
         }
-        push_line(&mut lines, indent, tag);
+        push_line(&mut output, indent, tag);
         if !is_closing && !is_void {
             indent += 1;
         }
         rest = &rest[close + 1..];
-        if !is_closing && matches!(normalized.as_str(), "script" | "style") {
-            let closing_tag = format!("</{normalized}");
-            if let Some(closing_start) = rest.to_ascii_lowercase().find(&closing_tag) {
+        if !is_closing
+            && (tag_name.eq_ignore_ascii_case("script") || tag_name.eq_ignore_ascii_case("style"))
+        {
+            let closing_tag = if tag_name.eq_ignore_ascii_case("script") {
+                "</script"
+            } else {
+                "</style"
+            };
+            if let Some(closing_start) = find_ignore_ascii_case(rest, closing_tag) {
                 let embedded = &rest[..closing_start];
                 for line in format_braced_source(embedded).lines() {
-                    push_line(&mut lines, indent, line);
+                    push_line(&mut output, indent, line);
                 }
                 rest = &rest[closing_start..];
             }
         }
     }
-    lines.join("\n")
+    output
+}
+
+fn find_ignore_ascii_case(value: &str, needle: &str) -> Option<usize> {
+    value
+        .as_bytes()
+        .windows(needle.len())
+        .position(|candidate| candidate.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 fn format_braced_source(source: &str) -> String {
@@ -457,15 +472,19 @@ fn wrap_long_code_lines(source: &str, max_columns: usize) -> String {
     output
 }
 
-fn push_line(lines: &mut Vec<String>, indent: usize, value: &str) {
+fn push_line(output: &mut String, indent: usize, value: &str) {
     let value = value.trim();
     if !value.is_empty() {
-        lines.push(format!("{}{}", "  ".repeat(indent), value));
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        write_indent(output, indent);
+        output.push_str(value);
     }
 }
 
 fn write_indent(output: &mut String, indent: usize) {
-    output.push_str(&"  ".repeat(indent));
+    output.extend(std::iter::repeat_n(' ', indent.saturating_mul(2)));
 }
 
 fn write_pending_space(output: &mut String, pending_space: &mut bool) {

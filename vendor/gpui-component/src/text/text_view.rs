@@ -1156,6 +1156,7 @@ mod tests {
             list_state,
             scroll_handle,
             pending_parsed_update: None,
+            requested_updates: Rc::new(RefCell::new(RequestedUpdates::default())),
         }
     }
 

@@ -77,20 +77,19 @@ impl McpServer {
             .get("method")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if id.is_none() {
-            return None;
-        }
-        let id = id.unwrap_or(Value::Null);
+        let id = id?;
         let response = match method {
             "initialize" => {
                 let requested_version = request
                     .pointer("/params/protocolVersion")
                     .and_then(Value::as_str)
                     .unwrap_or(LATEST_PROTOCOL_VERSION);
-                let negotiated_version = SUPPORTED_PROTOCOL_VERSIONS
-                    .contains(&requested_version)
-                    .then_some(requested_version)
-                    .unwrap_or(LATEST_PROTOCOL_VERSION);
+                let negotiated_version = if SUPPORTED_PROTOCOL_VERSIONS.contains(&requested_version)
+                {
+                    requested_version
+                } else {
+                    LATEST_PROTOCOL_VERSION
+                };
                 rpc_result(
                     id,
                     json!({

@@ -2,14 +2,15 @@ use std::{rc::Rc, time::Duration};
 
 use crate::{
     ActiveTheme, Colorize as _, Disableable, FocusableExt as _, Icon, IconName, Selectable,
-    Sizable, Size, StyledExt, animation::cubic_bezier, h_flex, spinner::Spinner,
-    tooltip::Tooltip,
+    Sizable, Size, StyledExt,
+    animation::{StableAnimationExt as _, cubic_bezier},
+    h_flex, spinner::Spinner, tooltip::Tooltip,
 };
 use gpui::{
-    Action, Animation, AnimationExt as _, AnyElement, App, ClickEvent, Corners, Div, Edges,
-    ElementId, FontWeight, Hsla, InteractiveElement, Interactivity, IntoElement, MouseButton,
-    MouseClickEvent, MouseDownEvent, ParentElement, Pixels, RenderOnce, SharedString, Stateful,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    Action, Animation, AnyElement, App, ClickEvent, Corners, Div, Edges, ElementId, FontWeight, Hsla,
+    InteractiveElement, Interactivity, IntoElement, MouseButton, MouseClickEvent, MouseDownEvent,
+    ParentElement, Pixels, RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, Window, div,
     prelude::FluentBuilder as _, px, relative,
 };
 
@@ -718,10 +719,9 @@ impl RenderOnce for Button {
                     return this.into_any_element();
                 }
                 let start = if motion_hovered { 0.96 } else { 1.0 };
-                this.with_animation(
-                    SharedString::from(format!(
-                        "button-hover:{motion_id:?}:{motion_hovered}"
-                    )),
+                this.with_stable_animation(
+                    SharedString::from(format!("button-hover:{motion_id:?}")),
+                    motion_hovered as usize,
                     Animation::new(Duration::from_secs_f64(0.12))
                         .with_easing(cubic_bezier(0.2, 0.8, 0.2, 1.0)),
                     move |this, delta| this.opacity(start + (1.0 - start) * delta),

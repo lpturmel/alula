@@ -22,24 +22,32 @@ fn main() {
         .unwrap_or(1);
     match workload.as_str() {
         "format" => profile_format(multiplier),
+        "format-html" => profile_format_html(multiplier),
         "format-legacy" => profile_format_legacy(multiplier),
         "variables" => profile_variables(multiplier),
         "variables-legacy" => profile_variables_legacy(multiplier),
         "startup" => profile_startup(multiplier),
         "clone" => profile_clone(multiplier),
         "save" => profile_save(multiplier),
+        "environment-sync" => profile_environment_sync(multiplier),
+        "environment-lookup" => profile_environment_lookup(multiplier),
+        "history-push" => profile_history_push(multiplier),
         "fixture" => write_fixture(),
         "ui-fixture" => write_ui_fixture(),
         "all" => {
             profile_format(multiplier);
+            profile_format_html(multiplier);
             profile_variables(multiplier);
             profile_startup(multiplier);
             profile_clone(multiplier);
             profile_save(multiplier);
+            profile_environment_sync(multiplier);
+            profile_environment_lookup(multiplier);
+            profile_history_push(multiplier);
         }
         _ => {
             eprintln!(
-                "usage: perf_profile [all|format|format-legacy|variables|variables-legacy|startup|clone|save|fixture <config-path>|ui-fixture <config-path> [item-count]]"
+                "usage: perf_profile [all|format|format-html|format-legacy|variables|variables-legacy|startup|clone|save|environment-sync|environment-lookup|history-push|fixture <config-path>|ui-fixture <config-path> [item-count]]"
             );
             process::exit(2);
         }
@@ -135,6 +143,19 @@ fn profile_format(multiplier: usize) {
     });
 }
 
+fn profile_format_html(multiplier: usize) {
+    let body = make_html(10_000);
+    run(
+        "HTML response formatting",
+        body.len(),
+        20 * multiplier,
+        || {
+            let cache = ResponseBodyCache::new(black_box(&body), Some("text/html"));
+            black_box(cache.formatted.markdown.len() + cache.raw.text.len())
+        },
+    );
+}
+
 fn profile_variables(multiplier: usize) {
     let mut environment = Environment::new("Performance");
     environment.variables = (0..128)
@@ -213,6 +234,24 @@ fn profile_startup(multiplier: usize) {
                 .unwrap_or(0)
         })
         .sum::<u64>() as usize;
+    let startup_bytes = [&paths.workspace, &paths.environments]
+        .iter()
+        .map(|path| {
+            std::fs::metadata(path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0)
+        })
+        .sum::<u64>() as usize;
+    run(
+        "startup-critical state load",
+        startup_bytes,
+        40 * multiplier,
+        || {
+            let loaded = PersistedState::load_startup(black_box(&paths))
+                .expect("benchmark startup state should load");
+            black_box(loaded.workspace.requests.len() + loaded.environments.environments.len())
+        },
+    );
     run("persisted state load", total_bytes, 40 * multiplier, || {
         let loaded = PersistedState::load(black_box(&paths)).expect("benchmark state should load");
         black_box(
@@ -244,6 +283,87 @@ fn profile_save(multiplier: usize) {
         black_box(state.history.entries.len())
     });
     let _ = std::fs::remove_dir_all(directory);
+}
+
+fn profile_environment_sync(multiplier: usize) {
+    let open_requests = (0..100)
+        .map(|index| make_request(index * 100, "updated"))
+        .collect::<Vec<_>>();
+    let mut environment = Environment::new("Large environment");
+    environment.requests = (0..10_000)
+        .map(|index| make_request(index, "saved"))
+        .collect();
+    let mut environments = EnvironmentStore {
+        version: 1,
+        environments: vec![environment],
+    };
+    run("large environment sync", 0, 40 * multiplier, || {
+        environments.sync_open_requests(black_box(&open_requests));
+        black_box(environments.environments[0].requests.len())
+    });
+}
+
+fn profile_environment_lookup(multiplier: usize) {
+    let mut environment = Environment::new("Large environment");
+    environment.requests = (0..10_000)
+        .map(|index| make_request(index, "saved"))
+        .collect();
+    let environments = EnvironmentStore {
+        version: 1,
+        environments: vec![environment],
+    };
+    let request_ids = (0..100)
+        .map(|index| format!("request-{}", index * 100))
+        .collect::<Vec<_>>();
+    run(
+        "large environment lookup batch",
+        0,
+        100 * multiplier,
+        || {
+            let assigned_ids = black_box(&environments)
+                .assigned_request_ids(request_ids.iter().map(String::as_str));
+            let assigned = request_ids
+                .iter()
+                .filter(|request_id| assigned_ids.contains(black_box(request_id).as_str()))
+                .count();
+            black_box(assigned)
+        },
+    );
+}
+
+fn profile_history_push(multiplier: usize) {
+    let mut history = HistoryStore {
+        version: 1,
+        entries: Arc::new(
+            (0..500)
+                .map(|index| HistoryEntry {
+                    id: format!("history-{index}"),
+                    sent_at_unix_ms: index,
+                    request: make_request(index as usize, "saved"),
+                    status: Some(200),
+                    status_text: Some("OK".into()),
+                    elapsed_ms: Some(42),
+                    size_bytes: Some(8_192),
+                    error: None,
+                })
+                .collect(),
+        ),
+    };
+    let mut sequence = 0_u64;
+    run("bounded history push", 0, 20_000 * multiplier, || {
+        sequence = sequence.wrapping_add(1);
+        history.push(HistoryEntry {
+            id: format!("history-new-{sequence}"),
+            sent_at_unix_ms: sequence,
+            request: make_request(sequence as usize, "new"),
+            status: Some(200),
+            status_text: Some("OK".into()),
+            elapsed_ms: Some(42),
+            size_bytes: Some(8_192),
+            error: None,
+        });
+        black_box(history.entries.len())
+    });
 }
 
 fn legacy_chunked_fenced_code_blocks(language: &str, body: &str) -> String {
@@ -344,6 +464,23 @@ fn make_json(records: usize) -> String {
         .unwrap();
     }
     body.push(']');
+    body
+}
+
+fn make_html(records: usize) -> String {
+    let mut body = String::with_capacity(records * 100);
+    body.push_str("<!doctype html><html><body>");
+    for index in 0..records {
+        use std::fmt::Write as _;
+        write!(
+            body,
+            "<article data-id=\"{index}\"><h2>Record {index}</h2><p>alpha beta gamma</p></article>"
+        )
+        .unwrap();
+    }
+    body.push_str(
+        "<script>const ready=true;function value(){return ready;}</script></body></html>",
+    );
     body
 }
 

@@ -228,7 +228,7 @@ impl ShortcutCommand {
         }
     }
 
-    pub fn binding<'a>(self, settings: &'a KeybindingSettings) -> &'a str {
+    pub fn binding(self, settings: &KeybindingSettings) -> &str {
         match self {
             Self::OpenCommandPalette => &settings.command_palette,
             Self::CreateNew => &settings.create_new,

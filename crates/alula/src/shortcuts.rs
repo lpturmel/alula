@@ -23,8 +23,21 @@ actions!(
         FocusUrl,
         ShowFormattedResponse,
         ShowRawResponse,
+        QuitApplication,
     ]
 );
+
+fn platform_key_bindings() -> Vec<KeyBinding> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![KeyBinding::new("cmd-q", QuitApplication, None)]
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+}
 
 pub fn configured_key_bindings(config: &AppConfig) -> Vec<KeyBinding> {
     let mut bindings = Vec::new();
@@ -63,6 +76,14 @@ pub fn configured_key_bindings(config: &AppConfig) -> Vec<KeyBinding> {
     bindings
 }
 
+pub fn application_key_bindings(config: &AppConfig) -> Vec<KeyBinding> {
+    let mut bindings = configured_key_bindings(config);
+    // System shortcuts are reserved and must win over conflicting user
+    // bindings, so append them last (GPUI gives later bindings precedence).
+    bindings.extend(platform_key_bindings());
+    bindings
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +105,19 @@ mod tests {
         assert!(!pending);
         assert_eq!(bindings.len(), 1);
         assert!(bindings[0].action().as_any().is::<OpenCommandPalette>());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_quit_shortcut_matches_without_a_focused_key_context() {
+        let mut config = AppConfig::default();
+        config.keybindings.command_palette = "cmd-q".into();
+        let keymap = Keymap::new(application_key_bindings(&config));
+        let input = [Keystroke::parse("cmd-q").unwrap()];
+        let (bindings, pending) = keymap.bindings_for_input(&input, &[]);
+
+        assert!(!pending);
+        assert_eq!(bindings.len(), 2);
+        assert!(bindings[0].action().as_any().is::<QuitApplication>());
     }
 }

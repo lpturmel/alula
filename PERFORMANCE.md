@@ -1,5 +1,78 @@
 # Performance report
 
+## Whole-app follow-up pass (2026-08-30)
+
+This pass targeted the remaining startup, persistence, large-collection, HTML,
+networking, and production-codegen costs. The before figures are warmed
+baselines captured immediately before the changes; the after figures are
+medians of five warmed runs with the repository's `profiling` profile.
+Measurements used the same Apple M1 Max and Rust 1.97.1 toolchain described
+below.
+
+| Workload | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| HTML response formatting | 21.704 ms | 7.659 ms | **64.7% faster** |
+| Variable resolution | 42.203 µs | 26.268 µs | **37.8% faster** |
+| Persisted-state load (warm cache) | 12.450 ms | 1.128 ms | **90.9% faster** |
+| Persisted-state save | 21.631 ms | 21.017 ms | **2.8% faster** |
+| 100-tab / 10,000-request environment sync | 11.760 ms | 293.694 µs | **97.5% faster** |
+| 100-tab assignment lookup in 10,000 requests | 4.044 ms | 345.964 µs | **91.4% faster** |
+| Bounded 500-entry history insertion | 14.902 µs | 1.393 µs | **90.7% faster** |
+| Production benchmark binary | 1.95 MB | 1.61 MB | **17.8% smaller** |
+
+The native QA build also opened and scrolled an environment containing 10,000
+saved requests and 10,000 variables. Both pages construct only the visible
+rows; scrolling five pages advanced the request list from request 100000 to
+the 100072–100081 range without a layout stall.
+
+### Startup follow-up
+
+History loading and response-language registration now begin after GPUI has
+rendered the first frame. A side-by-side warm-cache benchmark of the unchanged
+full-state path and the new startup-critical path measured medians of 842.907
+µs and 250.223 µs respectively, removing **70.3%** of state-loading time from
+the pre-window path. The native QA build also opened with a 500-entry fixture
+and returned those deferred entries through its live agent interface after the
+first frame.
+
+### Changes in the follow-up pass
+
+- Versioned, size-bounded binary caches sit beside the editable TOML state.
+  Cache validity is tied to the TOML file's size and nanosecond modification
+  timestamp. Missing, stale, corrupt, oversized, or older-format caches fall
+  back to TOML and rebuild without becoming load errors.
+- Startup loads only the workspace and environments needed to build the first
+  window. History loads after the first frame and merges behind any entries
+  recorded in the meantime; persistence waits for that merge so it cannot
+  overwrite history with the temporary empty state.
+- Tree-sitter's global response-language registry initializes after the first
+  frame. A one-time guard still initializes it synchronously if an unusually
+  fast response arrives before the background warm-up finishes.
+- TOML and cache representations serialize concurrently, unchanged files are
+  not rewritten, and unique temporary filenames prevent overlapping saves
+  from colliding.
+- Open-request synchronization builds one lookup table instead of scanning all
+  open tabs for every saved request. Batch assignment checks retain only the
+  requested tab IDs instead of materializing the entire environment index.
+- Root-level environment request lists now use GPUI's lazy `uniform_list`.
+  Collapsed folder sections no longer clone hidden request drafts, and empty
+  history searches no longer build and lowercase a searchable string for all
+  500 entries on every paint.
+- History storage uses a copy-on-write `VecDeque`, making newest-first bounded
+  insertion constant-time instead of shifting the full history vector.
+- HTML formatting writes directly into one output buffer, avoids per-tag
+  lowercase strings, and performs case-insensitive detection without copying
+  the remaining document.
+- Variable parsing reuses the already-located closing delimiter, validates
+  ASCII names bytewise, and avoids falling back to a linear scan after an
+  indexed lookup miss.
+- HTTP responses retain a 2 KiB first-paint read, then switch to 64 KiB reads.
+  Bounded `Content-Length` preallocation reduces reallocations without trusting
+  an arbitrarily large server-provided size.
+- Production builds use thin LTO and one codegen unit. The `profiling` profile
+  explicitly keeps LTO disabled and normal codegen parallelism for fast,
+  symbolicated iteration.
+
 Measured on 2026-08-23 on an Apple M1 Max (10 cores, 64 GB), macOS 26.6.2,
 Rust 1.97.1. CPU results are medians of five warmed runs using the repository's
 `profiling` Cargo profile. The fixture contains a 30,000-record JSON response,
@@ -86,20 +159,19 @@ cargo build --profile profiling -p alula --example perf_profile
 target/profiling/examples/perf_profile all 1
 target/profiling/examples/perf_profile format-legacy 1
 target/profiling/examples/perf_profile variables-legacy 1
+target/profiling/examples/perf_profile format-html 1
+target/profiling/examples/perf_profile environment-sync 1
+target/profiling/examples/perf_profile environment-lookup 1
+target/profiling/examples/perf_profile history-push 1
 ```
 
-## Further disk/startup opportunities
+## Further opportunities
 
-1. Keep TOML as the editable source of truth but write a versioned binary cache
-   after successful parsing. Validate it with schema version, source size, and
-   modification time; a valid cache would avoid most `winnow`/TOML parsing on
-   subsequent launches.
-2. Move history to an append-oriented store such as SQLite in WAL mode. Alula
+1. Move history to an append-oriented store such as SQLite in WAL mode. Alula
    currently rewrites the bounded history document; incremental inserts would
    reduce write amplification and make loading only the newest entries cheap.
-3. Load history after the first window becomes visible. Workspace and
-   environments are required to construct the request editor, while history is
-   not needed until its navigation section is opened.
-4. Build release distributions with thin LTO and one codegen unit after
-   measuring build-time impact. This can improve startup instruction locality,
-   but should be evaluated separately from development builds.
+2. Flatten expanded folder trees into a virtual row model. Root-only large
+   environments are now lazy, but an expanded folder containing thousands of
+   direct requests still builds all of that folder's visible rows.
+3. Move response formatting into a cancellable worker generation so a newer
+   request can supersede CPU work for an older multi-megabyte response.

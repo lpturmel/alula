@@ -193,7 +193,7 @@ impl ColorKey {
         }
     }
 
-    fn get<'a>(self, config: &'a AppConfig) -> &'a str {
+    fn get(self, config: &AppConfig) -> &str {
         let c = &config.theme.colors;
         let s = &config.syntax;
         match self {
